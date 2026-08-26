@@ -25,17 +25,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.text.KeyboardOptions
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
 import io.github.belzenn.androidlinuxbridge.service.BridgeService
+import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
@@ -55,15 +63,76 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val savedServerAddress = ConnectionSettings.load(this)
+        BridgeState.updateServer(
+            savedServerAddress.host,
+            savedServerAddress.port
+        )
+
         setContent {
+            var serverHost by remember {
+                mutableStateOf(savedServerAddress.host)
+            }
+            var serverPort by remember {
+                mutableStateOf(savedServerAddress.port.toString())
+            }
+            var settingsError by remember { mutableStateOf<String?>(null) }
+
             MaterialTheme {
                 BridgeScreen(
                     status = BridgeState.connectionStatus.value,
-                    serverAddress =
-                        "${BridgeState.COMPUTER_IP}:" +
-                                BridgeState.COMPUTER_PORT,
+                    serverAddress = "${BridgeState.serverHost.value}:" +
+                        BridgeState.serverPort.intValue,
                     batteryLevel = BridgeState.batteryLevel.intValue,
                     logs = BridgeState.logs,
+                    serverHost = serverHost,
+                    serverPort = serverPort,
+                    settingsError = settingsError,
+                    onServerHostChanged = {
+                        serverHost = it
+                        settingsError = null
+                    },
+                    onServerPortChanged = {
+                        serverPort = it.filter(Char::isDigit)
+                        settingsError = null
+                    },
+                    onSaveSettings = {
+                        val normalizedHost = serverHost.trim()
+                        val normalizedPort = serverPort.toIntOrNull()
+
+                        when {
+                            normalizedHost.isEmpty() -> {
+                                settingsError = "Host cannot be empty"
+                            }
+
+                            normalizedPort == null ||
+                                normalizedPort !in 1..65535 -> {
+                                settingsError = "Port must be between 1 and 65535"
+                            }
+
+                            else -> {
+                                ConnectionSettings.save(
+                                    this,
+                                    normalizedHost,
+                                    normalizedPort
+                                )
+                                BridgeState.updateServer(
+                                    normalizedHost,
+                                    normalizedPort
+                                )
+                                BridgeState.addLog(
+                                    "Connection settings saved"
+                                )
+                                settingsError = null
+
+                                if (hasLocalNetworkPermission()) {
+                                    BridgeService.applySettings(this)
+                                } else {
+                                    requestRequiredPermissions()
+                                }
+                            }
+                        }
+                    },
                     onClearLogs = BridgeState::clearLogs,
                     onReconnect = {
                         if (hasLocalNetworkPermission()) {
@@ -104,8 +173,8 @@ class MainActivity : ComponentActivity() {
 
     private fun hasLocalNetworkPermission(): Boolean {
         return Build.VERSION.SDK_INT < 37 ||
-                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) ==
-                PackageManager.PERMISSION_GRANTED
+            checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) ==
+            PackageManager.PERMISSION_GRANTED
     }
 }
 
@@ -115,6 +184,12 @@ private fun BridgeScreen(
     serverAddress: String,
     batteryLevel: Int,
     logs: List<String>,
+    serverHost: String,
+    serverPort: String,
+    settingsError: String?,
+    onServerHostChanged: (String) -> Unit,
+    onServerPortChanged: (String) -> Unit,
+    onSaveSettings: () -> Unit,
     onClearLogs: () -> Unit,
     onReconnect: () -> Unit
 ) {
@@ -129,6 +204,19 @@ private fun BridgeScreen(
                 serverAddress = serverAddress,
                 batteryLevel = batteryLevel,
                 onReconnect = onReconnect
+            )
+
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 20.dp)
+            )
+
+            ConnectionSettingsForm(
+                serverHost = serverHost,
+                serverPort = serverPort,
+                error = settingsError,
+                onServerHostChanged = onServerHostChanged,
+                onServerPortChanged = onServerPortChanged,
+                onSave = onSaveSettings
             )
 
             HorizontalDivider(
@@ -151,8 +239,57 @@ private fun BridgeScreen(
 
             LogsView(
                 logs = logs,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+@Composable
+private fun ConnectionSettingsForm(
+    serverHost: String,
+    serverPort: String,
+    error: String?,
+    onServerHostChanged: (String) -> Unit,
+    onServerPortChanged: (String) -> Unit,
+    onSave: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(text = "Connection settings", fontSize = 22.sp)
+
+        OutlinedTextField(
+            value = serverHost,
+            onValueChange = onServerHostChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Linux host or IP") },
+            singleLine = true
+        )
+
+        OutlinedTextField(
+            value = serverPort,
+            onValueChange = onServerPortChanged,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Port") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Number
+            ),
+            isError = error != null,
+            supportingText = if (error != null) {
+                { Text(error) }
+            } else {
+                null
+            }
+        )
+
+        Button(
+            onClick = onSave,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text("Save and reconnect")
         }
     }
 }

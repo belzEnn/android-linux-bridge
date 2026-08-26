@@ -17,6 +17,7 @@ import io.github.belzenn.androidlinuxbridge.R
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionManager
 import io.github.belzenn.androidlinuxbridge.features.battery.BatteryHandler
 import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
+import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class BridgeService : Service() {
     private lateinit var connectionManager: ConnectionManager
@@ -26,6 +27,15 @@ class BridgeService : Service() {
 
         createNotificationChannel()
         startAsForegroundService()
+
+        createConnectionManager()
+
+        BridgeState.addLog("Bridge service started")
+    }
+
+    private fun createConnectionManager() {
+        val serverAddress = ConnectionSettings.load(this)
+        BridgeState.updateServer(serverAddress.host, serverAddress.port)
 
         val batteryHandler = BatteryHandler(applicationContext) { level ->
             BridgeState.batteryLevel.intValue = level
@@ -38,8 +48,8 @@ class BridgeService : Service() {
         )
 
         connectionManager = ConnectionManager(
-            host = BridgeState.COMPUTER_IP,
-            port = BridgeState.COMPUTER_PORT,
+            host = serverAddress.host,
+            port = serverAddress.port,
             messageRouter = messageRouter,
             onStatusChanged = { status ->
                 BridgeState.connectionStatus.value = status
@@ -47,10 +57,8 @@ class BridgeService : Service() {
             onLog = BridgeState::addLog
         )
 
-        BridgeState.addLog("Bridge service started")
         BridgeState.addLog(
-            "Server address: " +
-                    "${BridgeState.COMPUTER_IP}:${BridgeState.COMPUTER_PORT}"
+            "Server address: ${serverAddress.host}:${serverAddress.port}"
         )
     }
 
@@ -61,6 +69,7 @@ class BridgeService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_RECONNECT -> connectionManager.reconnect()
+            ACTION_APPLY_SETTINGS -> applyConnectionSettings()
             else -> connectionManager.start()
         }
 
@@ -76,6 +85,13 @@ class BridgeService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun applyConnectionSettings() {
+        BridgeState.addLog("Applying connection settings")
+        connectionManager.stop()
+        createConnectionManager()
+        connectionManager.start()
+    }
 
     private fun startAsForegroundService() {
         val openAppIntent = Intent(this, MainActivity::class.java)
@@ -124,6 +140,8 @@ class BridgeService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_RECONNECT =
             "io.github.belzenn.androidlinuxbridge.action.RECONNECT"
+        private const val ACTION_APPLY_SETTINGS =
+            "io.github.belzenn.androidlinuxbridge.action.APPLY_SETTINGS"
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -137,6 +155,15 @@ class BridgeService : Service() {
                 context,
                 Intent(context, BridgeService::class.java).apply {
                     action = ACTION_RECONNECT
+                }
+            )
+        }
+
+        fun applySettings(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, BridgeService::class.java).apply {
+                    action = ACTION_APPLY_SETTINGS
                 }
             )
         }

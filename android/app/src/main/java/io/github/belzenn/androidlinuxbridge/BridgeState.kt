@@ -8,12 +8,16 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 object BridgeState {
-    const val COMPUTER_IP = "192.168.1.102"
-    const val COMPUTER_PORT = 4242
-
     val batteryLevel = mutableIntStateOf(-1)
     val connectionStatus = mutableStateOf(ConnectionStatus.DISCONNECTED)
+    val serverHost = mutableStateOf("")
+    val serverPort = mutableIntStateOf(0)
     val logs = mutableStateListOf<String>()
+
+    fun updateServer(host: String, port: Int) {
+        serverHost.value = host
+        serverPort.intValue = port
+    }
 
     fun addLog(message: String) {
         val time = LocalTime.now().format(TIME_FORMAT)
