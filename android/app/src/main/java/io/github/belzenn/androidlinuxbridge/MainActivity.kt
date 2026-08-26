@@ -1,7 +1,11 @@
 package io.github.belzenn.androidlinuxbridge
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -25,90 +29,83 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.github.belzenn.androidlinuxbridge.connection.ConnectionManager
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
-import io.github.belzenn.androidlinuxbridge.features.battery.BatteryHandler
-import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
+import io.github.belzenn.androidlinuxbridge.service.BridgeService
 
 class MainActivity : ComponentActivity() {
-    private val batteryLevel = mutableIntStateOf(-1)
-    private val connectionStatus =
-        mutableStateOf(ConnectionStatus.DISCONNECTED)
-    private val logs = mutableStateListOf<String>()
-
-    private val computerIp = "192.168.1.102"
-    private val computerPort = 4242
-
-    private lateinit var connectionManager: ConnectionManager
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) {
+        if (hasLocalNetworkPermission()) {
+            BridgeService.start(this)
+        } else {
+            BridgeState.connectionStatus.value =
+                ConnectionStatus.RECONNECT_REQUIRED
+            BridgeState.addLog(
+                "Local network permission is required"
+            )
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val batteryHandler = BatteryHandler(
-            applicationContext
-        ) { level ->
-            batteryLevel.intValue = level
-        }
-
-        val messageRouter = MessageRouter(
-            handlers = mapOf(
-                "battery.get" to batteryHandler::handle
-            )
-        )
-
-        connectionManager = ConnectionManager(
-            host = computerIp,
-            port = computerPort,
-            messageRouter = messageRouter,
-            onStatusChanged = { status ->
-                connectionStatus.value = status
-            },
-            onLog = ::addLog
-        )
-
-        addLog("Application started")
-        addLog("Server address: $computerIp:$computerPort")
-
         setContent {
             MaterialTheme {
                 BridgeScreen(
-                    status = connectionStatus.value,
-                    serverAddress = "$computerIp:$computerPort",
-                    batteryLevel = batteryLevel.intValue,
-                    logs = logs,
-                    onClearLogs = logs::clear,
-                    onReconnect = connectionManager::reconnect
+                    status = BridgeState.connectionStatus.value,
+                    serverAddress =
+                        "${BridgeState.COMPUTER_IP}:" +
+                                BridgeState.COMPUTER_PORT,
+                    batteryLevel = BridgeState.batteryLevel.intValue,
+                    logs = BridgeState.logs,
+                    onClearLogs = BridgeState::clearLogs,
+                    onReconnect = {
+                        if (hasLocalNetworkPermission()) {
+                            BridgeService.reconnect(this)
+                        } else {
+                            requestRequiredPermissions()
+                        }
+                    }
                 )
             }
         }
 
-        connectionManager.start()
+        BridgeState.addLog("Application opened")
+        requestRequiredPermissions()
     }
 
-    private fun addLog(message: String) {
-        val time = LocalTime.now().format(
-            DateTimeFormatter.ofPattern("HH:mm:ss")
-        )
-        logs.add("[$time] $message")
+    private fun requestRequiredPermissions() {
+        val missingPermissions = buildList {
+            if (!hasLocalNetworkPermission()) {
+                add(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            }
 
-        if (logs.size > 200) {
-            logs.removeAt(0)
+            if (
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+                PackageManager.PERMISSION_GRANTED
+            ) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+
+        if (missingPermissions.isEmpty()) {
+            BridgeService.start(this)
+        } else {
+            permissionLauncher.launch(missingPermissions.toTypedArray())
         }
     }
 
-    override fun onDestroy() {
-        connectionManager.stop()
-        super.onDestroy()
+    private fun hasLocalNetworkPermission(): Boolean {
+        return Build.VERSION.SDK_INT < 37 ||
+                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) ==
+                PackageManager.PERMISSION_GRANTED
     }
 }
 
