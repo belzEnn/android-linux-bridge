@@ -1,10 +1,5 @@
 package io.github.belzenn.androidlinuxbridge
 
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.BatteryManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,81 +33,51 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import org.json.JSONObject
-import java.io.BufferedWriter
-import java.io.OutputStreamWriter
-import java.net.InetSocketAddress
-import java.net.Socket
+import io.github.belzenn.androidlinuxbridge.connection.ConnectionManager
+import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
+import io.github.belzenn.androidlinuxbridge.features.battery.BatteryHandler
+import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
-
     private val batteryLevel = mutableIntStateOf(-1)
     private val connectionStatus =
-        mutableStateOf(ConnectionStatus.CONNECTING)
-
+        mutableStateOf(ConnectionStatus.DISCONNECTED)
     private val logs = mutableStateListOf<String>()
 
-    /*
-     * Android Emulator:
-     * private val computerIp = "10.0.2.2"
-     *
-     * Physical phone:
-     * use the computer's local Wi-Fi address,
-     * for example "192.168.1.100".
-     */
     private val computerIp = "192.168.1.102"
     private val computerPort = 4242
 
-    private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != Intent.ACTION_BATTERY_CHANGED) {
-                return
-            }
-
-            val level = intent.getIntExtra(
-                BatteryManager.EXTRA_LEVEL,
-                -1
-            )
-
-            val scale = intent.getIntExtra(
-                BatteryManager.EXTRA_SCALE,
-                100
-            )
-
-            if (level < 0 || scale <= 0) {
-                addLog("Failed to read battery level")
-                return
-            }
-
-            val percentage = level * 100 / scale
-
-            if (percentage != batteryLevel.intValue) {
-                batteryLevel.intValue = percentage
-                addLog("Battery level: $percentage%")
-            }
-        }
-    }
+    private lateinit var connectionManager: ConnectionManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        addLog("Application started")
-        addLog("Server address: $computerIp:$computerPort")
+        val batteryHandler = BatteryHandler(
+            applicationContext
+        ) { level ->
+            batteryLevel.intValue = level
+        }
 
-        registerReceiver(
-            batteryReceiver,
-            IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        val messageRouter = MessageRouter(
+            handlers = mapOf(
+                "battery.get" to batteryHandler::handle
+            )
         )
 
-        startConnectionLoop()
+        connectionManager = ConnectionManager(
+            host = computerIp,
+            port = computerPort,
+            messageRouter = messageRouter,
+            onStatusChanged = { status ->
+                connectionStatus.value = status
+            },
+            onLog = ::addLog
+        )
+
+        addLog("Application started")
+        addLog("Server address: $computerIp:$computerPort")
 
         setContent {
             MaterialTheme {
@@ -121,104 +86,19 @@ class MainActivity : ComponentActivity() {
                     serverAddress = "$computerIp:$computerPort",
                     batteryLevel = batteryLevel.intValue,
                     logs = logs,
-                    onClearLogs = {
-                        logs.clear()
-                    }
+                    onClearLogs = logs::clear,
+                    onReconnect = connectionManager::reconnect
                 )
             }
         }
-    }
 
-    private fun startConnectionLoop() {
-        lifecycleScope.launch {
-            while (isActive) {
-                if (connectionStatus.value != ConnectionStatus.CONNECTED) {
-                    connectionStatus.value =
-                        ConnectionStatus.CONNECTING
-                }
-
-                addLog("Connecting to $computerIp:$computerPort...")
-
-                val result = withContext(Dispatchers.IO) {
-                    sendBatteryLevel(batteryLevel.intValue)
-                }
-
-                if (result.isSuccess) {
-                    connectionStatus.value =
-                        ConnectionStatus.CONNECTED
-
-                    addLog(
-                        "Connected, battery sent: " +
-                                "${batteryLevel.intValue}%"
-                    )
-                } else {
-                    connectionStatus.value =
-                        ConnectionStatus.DISCONNECTED
-
-                    val exception = result.exceptionOrNull()
-                    val errorName =
-                        exception?.javaClass?.simpleName
-                            ?: "UnknownError"
-                    val errorMessage =
-                        exception?.message
-                            ?: "No error message"
-
-                    addLog(
-                        "Connection failed: " +
-                                "$errorName: $errorMessage"
-                    )
-                }
-
-                delay(5_000)
-            }
-        }
-    }
-
-    private fun sendBatteryLevel(
-        level: Int
-    ): Result<Unit> {
-        if (level < 0) {
-            return Result.failure(
-                IllegalStateException(
-                    "Battery level is not available"
-                )
-            )
-        }
-
-        return runCatching {
-            Socket().use { socket ->
-                socket.connect(
-                    InetSocketAddress(
-                        computerIp,
-                        computerPort
-                    ),
-                    3_000
-                )
-
-                val message = JSONObject()
-                    .put("version", 1)
-                    .put("type", "battery")
-                    .put("level", level)
-                    .toString()
-
-                BufferedWriter(
-                    OutputStreamWriter(
-                        socket.getOutputStream()
-                    )
-                ).use { writer ->
-                    writer.write(message)
-                    writer.newLine()
-                    writer.flush()
-                }
-            }
-        }
+        connectionManager.start()
     }
 
     private fun addLog(message: String) {
         val time = LocalTime.now().format(
             DateTimeFormatter.ofPattern("HH:mm:ss")
         )
-
         logs.add("[$time] $message")
 
         if (logs.size > 200) {
@@ -227,15 +107,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        unregisterReceiver(batteryReceiver)
+        connectionManager.stop()
         super.onDestroy()
     }
-}
-
-private enum class ConnectionStatus {
-    CONNECTING,
-    CONNECTED,
-    DISCONNECTED
 }
 
 @Composable
@@ -244,11 +118,10 @@ private fun BridgeScreen(
     serverAddress: String,
     batteryLevel: Int,
     logs: List<String>,
-    onClearLogs: () -> Unit
+    onClearLogs: () -> Unit,
+    onReconnect: () -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxSize()
-    ) {
+    Surface(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -257,7 +130,8 @@ private fun BridgeScreen(
             ConnectionHeader(
                 status = status,
                 serverAddress = serverAddress,
-                batteryLevel = batteryLevel
+                batteryLevel = batteryLevel,
+                onReconnect = onReconnect
             )
 
             HorizontalDivider(
@@ -267,17 +141,11 @@ private fun BridgeScreen(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement =
-                    Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = "Logs",
-                    fontSize = 22.sp
-                )
+                Text(text = "Logs", fontSize = 22.sp)
 
-                Button(
-                    onClick = onClearLogs
-                ) {
+                Button(onClick = onClearLogs) {
                     Text("Clear")
                 }
             }
@@ -286,7 +154,7 @@ private fun BridgeScreen(
 
             LogsView(
                 logs = logs,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxSize()
             )
         }
     }
@@ -296,28 +164,21 @@ private fun BridgeScreen(
 private fun ConnectionHeader(
     status: ConnectionStatus,
     serverAddress: String,
-    batteryLevel: Int
+    batteryLevel: Int,
+    onReconnect: () -> Unit
 ) {
     val statusColor = when (status) {
-        ConnectionStatus.CONNECTING ->
-            Color(0xFFFFA000)
-
-        ConnectionStatus.CONNECTED ->
-            Color(0xFF4CAF50)
-
-        ConnectionStatus.DISCONNECTED ->
-            Color(0xFFF44336)
+        ConnectionStatus.CONNECTING -> Color(0xFFFFA000)
+        ConnectionStatus.CONNECTED -> Color(0xFF4CAF50)
+        ConnectionStatus.DISCONNECTED -> Color(0xFFF44336)
+        ConnectionStatus.RECONNECT_REQUIRED -> Color(0xFFF44336)
     }
 
     val statusText = when (status) {
-        ConnectionStatus.CONNECTING ->
-            "Connecting..."
-
-        ConnectionStatus.CONNECTED ->
-            "Connected"
-
-        ConnectionStatus.DISCONNECTED ->
-            "Disconnected"
+        ConnectionStatus.CONNECTING -> "Connecting..."
+        ConnectionStatus.CONNECTED -> "Connected"
+        ConnectionStatus.DISCONNECTED -> "Disconnected"
+        ConnectionStatus.RECONNECT_REQUIRED -> "Disconnected"
     }
 
     Column(
@@ -338,11 +199,7 @@ private fun ConnectionHeader(
             )
 
             Spacer(modifier = Modifier.size(10.dp))
-
-            Text(
-                text = statusText,
-                fontSize = 26.sp
-            )
+            Text(text = statusText, fontSize = 26.sp)
         }
 
         Spacer(modifier = Modifier.size(8.dp))
@@ -360,6 +217,14 @@ private fun ConnectionHeader(
             },
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+
+        if (status == ConnectionStatus.RECONNECT_REQUIRED) {
+            Spacer(modifier = Modifier.size(12.dp))
+
+            Button(onClick = onReconnect) {
+                Text("Reconnect")
+            }
+        }
     }
 }
 

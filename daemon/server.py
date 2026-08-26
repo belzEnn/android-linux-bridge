@@ -1,45 +1,68 @@
 import asyncio
-import json
+
+from .session import AndroidSession
 
 
-async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    address = writer.get_extra_info("peername")
-    print(f"Connected: {address}")
+class SessionRegistry:
+    def __init__(self) -> None:
+        self._sessions: list[AndroidSession] = []
 
-    try:
-        while data := await reader.readline():
-            try:
-                message = json.loads(data)
-            except json.JSONDecodeError:
-                print(f"Invalid message: {data.decode(errors="replace").strip()}")
-                continue
+    @property
+    def sessions(self) -> tuple[AndroidSession, ...]:
+        return tuple(session for session in self._sessions if session.connected)
 
-            if message.get("type") == "battery":
-                level = message.get("level")
-                print(f"Phone battery: {level}%")
+    @property
+    def active(self) -> AndroidSession | None:
+        sessions = self.sessions
+        return sessions[-1] if sessions else None
 
-    except ConnectionError:
-        pass
+    def add(self, session: AndroidSession) -> None:
+        self._sessions.append(session)
 
-    finally:
-        print(f"Disconnected: {address}")
-
-        writer.close()
-        await writer.wait_closed()
+    def remove(self, session: AndroidSession) -> None:
+        if session in self._sessions:
+            self._sessions.remove(session)
 
 
-async def main() -> None:
-    server = await asyncio.start_server(
-        handle_client,
-        host="0.0.0.0",
-        port=4242,
-    )
+class DaemonServer:
+    def __init__(self, host: str = "0.0.0.0", port: int = 4242) -> None:
+        self.host = host
+        self.port = port
+        self.registry = SessionRegistry()
+        self._server: asyncio.Server | None = None
 
-    print("Daemon listening on :4242")
+    async def start(self) -> None:
+        self._server = await asyncio.start_server(
+            self._handle_client,
+            host=self.host,
+            port=self.port,
+        )
+        print(f"Daemon listening on {self.host}:{self.port}")
 
-    async with server:
-        await server.serve_forever()
+    async def close(self) -> None:
+        if self._server is None:
+            return
 
+        self._server.close()
+        await self._server.wait_closed()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+        for session in self.registry.sessions:
+            await session.close()
+
+    async def _handle_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        session = AndroidSession(reader, writer)
+        self.registry.add(session)
+        print(f"Android connected: {session.address}")
+
+        try:
+            await session.receive_loop()
+        except ConnectionError as exception:
+            print(f"Connection error from {session.address}: {exception}")
+        finally:
+            self.registry.remove(session)
+            await session.close()
+            print(f"Android disconnected: {session.address}")
