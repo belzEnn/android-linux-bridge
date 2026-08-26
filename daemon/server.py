@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -6,13 +7,16 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     print(f"Connected: {address}")
 
     try:
-        while True:
-            data = await reader.readline()
+        while data := await reader.readline():
+            try:
+                message = json.loads(data)
+            except json.JSONDecodeError:
+                print(f"Invalid message: {data.decode(errors="replace").strip()}")
+                continue
 
-            if not data:
-                break
-
-            print(f"{data.decode().strip()}")
+            if message.get("type") == "battery":
+                level = message.get("level")
+                print(f"Phone battery: {level}%")
 
     except ConnectionError:
         pass
@@ -25,7 +29,11 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 
 async def main() -> None:
-    server = await asyncio.start_server(handle_client, "0.0.0.0", 4242)
+    server = await asyncio.start_server(
+        handle_client,
+        host="0.0.0.0",
+        port=4242,
+    )
 
     print("Daemon listening on :4242")
 
@@ -33,4 +41,5 @@ async def main() -> None:
         await server.serve_forever()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
