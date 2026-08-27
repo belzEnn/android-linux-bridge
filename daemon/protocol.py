@@ -4,11 +4,10 @@ from typing import Any
 
 
 class ProtocolError(ValueError):
-    """Raised when a peer sends a malformed protocol message."""
-
+    ...
+    # Raised when a peer sends a malformed protocol message
 
 def encode_message(message: Mapping[str, Any]) -> bytes:
-    """Encode one newline-delimited JSON message."""
     return (json.dumps(message, separators=(",", ":")) + "\n").encode("utf-8")
 
 
@@ -39,4 +38,23 @@ def make_request(
         "id": request_id,
         "method": method,
         "params": dict(params or {}),
+    }
+
+
+def make_response(request_id: str, result: Any) -> dict[str, Any]:
+    return {
+        "kind": "response",
+        "id": request_id,
+        "result": result,
+    }
+
+
+def make_error(request_id: str, code: str, message: str) -> dict[str, Any]:
+    return {
+        "kind": "response",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": message,
+        },
     }
