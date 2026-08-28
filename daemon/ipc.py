@@ -29,6 +29,8 @@ def get_ipc_socket_path() -> Path:
 
     return Path("/tmp") / f"android-linux-bridge-{os.getuid()}.sock"
 
+class IpcStartupError(RuntimeError):
+    ...
 
 class IpcRequestError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -82,8 +84,9 @@ class IpcServer:
             return
 
         if not stat.S_ISSOCK(mode):
-            raise RuntimeError(
-                f"IPC path exists and is not a socket: {self.socket_path}"
+            raise IpcStartupError(
+                f"IPC path exists and is not a socket: "
+                f"{self.socket_path}"
             )
 
         try:
@@ -97,7 +100,10 @@ class IpcServer:
         del reader
         writer.close()
         await writer.wait_closed()
-        raise RuntimeError("Android Linux Bridge daemon is already running")
+
+        raise IpcStartupError(
+            "Android Linux Bridge daemon is already running"
+        )
 
     async def _handle_client(
         self,
@@ -227,18 +233,34 @@ class IpcClient:
         self,
         method: str,
         params: Mapping[str, Any] | None = None,
+        *,
+        timeout: float = 5.0,
     ) -> Any:
-        if self._reader is None or self._writer is None:
+        reader = self._reader
+        writer = self._writer
+        if reader is None or writer is None:
             raise ConnectionError("CLI is not connected to the daemon")
 
         async with self._request_lock:
             request_id = uuid.uuid4().hex
-            self._writer.write(
-                encode_message(make_request(request_id, method, params))
-            )
-            await self._writer.drain()
 
-            data = await self._reader.readline()
+            async def exchange() -> bytes:
+                writer.write(
+                    encode_message(
+                        make_request(request_id, method, params)
+                    )
+                )
+                await writer.drain()
+                return await reader.readline()
+
+            try:
+                data = await asyncio.wait_for(exchange(), timeout)
+            except TimeoutError:
+                await self.close()
+                raise ConnectionError(
+                    f"Daemon did not respond within {timeout:g} seconds"
+                ) from None
+
             if not data:
                 raise ConnectionError("Daemon closed the IPC connection")
 
