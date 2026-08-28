@@ -59,7 +59,7 @@ class DaemonServer:
         print(f"Android connected: {session.address}")
 
         try:
-            await session.receive_loop()
+            await session.run()
         except ConnectionError as exception:
             print(f"Connection error from {session.address}: {exception}")
         finally:

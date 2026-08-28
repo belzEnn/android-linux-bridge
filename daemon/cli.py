@@ -91,7 +91,7 @@ async def run_cli(client: IpcClient) -> None:
         await wait_for_device(client)
 
         try:
-            command = (await asyncio.to_thread(input, "bridge> ")).strip().lower()
+            command = (await asyncio.to_thread(input, ">>> ")).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print()
             return

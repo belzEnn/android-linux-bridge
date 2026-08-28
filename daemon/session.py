@@ -6,6 +6,11 @@ from typing import Any
 
 from .protocol import ProtocolError, decode_message, encode_message, make_request
 
+HEARTBEAT_INTERVAL_SECONDS = 30.0
+HEARTBEAT_RETRY_DELAY_SECONDS = 5.0
+HEARTBEAT_TIMEOUT_SECONDS = 10.0
+MAX_HEARTBEAT_FAILURES = 3
+
 
 class RemoteError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
@@ -21,7 +26,7 @@ class AndroidSession:
     ) -> None:
         self.reader = reader
         self.writer = writer
-        self.address = writer.get_extra_info("peername")
+        self.address: tuple[str, int] = writer.get_extra_info("peername")
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
@@ -41,7 +46,7 @@ class AndroidSession:
             raise ConnectionError("Android device is not connected")
 
         request_id = uuid.uuid4().hex
-        future = asyncio.get_running_loop().create_future()
+        future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
 
         try:
@@ -49,6 +54,86 @@ class AndroidSession:
             return await asyncio.wait_for(future, timeout)
         finally:
             self._pending.pop(request_id, None)
+
+    async def run(self) -> None:
+        receive_task = asyncio.create_task(
+            self.receive_loop(),
+            name=f"android-receive-{self.address}",
+        )
+        heartbeat_task = asyncio.create_task(
+            self.heartbeat_loop(),
+            name=f"android-heartbeat-{self.address}",
+        )
+        tasks: set[asyncio.Task[None]] = {receive_task, heartbeat_task}
+
+        try:
+            done, _ = await asyncio.wait(
+                tasks,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            for task in done:
+                task.result()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
+            await asyncio.gather(
+                *tasks,
+                return_exceptions=True,
+            )
+            await self.close()
+
+    async def heartbeat_loop(self) -> None:
+        failures = 0
+
+        while self.connected:
+            delay = (
+                HEARTBEAT_INTERVAL_SECONDS
+                if failures == 0
+                else HEARTBEAT_RETRY_DELAY_SECONDS
+            )
+            await asyncio.sleep(delay)
+
+            try:
+                result = await self.request(
+                    "system.ping",
+                    timeout=HEARTBEAT_TIMEOUT_SECONDS,
+                )
+
+                if not isinstance(result, dict):
+                    raise ProtocolError(
+                        "Heartbeat result must be an object"
+                    )
+
+                if result.get("pong") is not True:
+                    raise ProtocolError(
+                        "Heartbeat response has no pong"
+                    )
+
+                if failures:
+                    print(f"Heartbeat recovered for {self.address}")
+                failures = 0
+            except asyncio.CancelledError:
+                raise
+            except (
+                ConnectionError,
+                asyncio.TimeoutError,
+                RuntimeError,
+                ProtocolError,
+            ) as exception:
+                failures += 1
+                print(
+                    f"Heartbeat failed for {self.address} "
+                    f"({failures}/{MAX_HEARTBEAT_FAILURES}): "
+                    f"{exception}"
+                )
+
+                if failures >= MAX_HEARTBEAT_FAILURES:
+                    raise ConnectionError(
+                        "Android session is unresponsive"
+                    ) from exception
 
     async def receive_loop(self) -> None:
         try:
@@ -64,7 +149,7 @@ class AndroidSession:
             await self.close()
 
     def _handle_message(self, message: dict[str, Any]) -> None:
-        kind = message["kind"]
+        kind = message.get("kind")
 
         if kind == "response":
             self._handle_response(message)
@@ -117,7 +202,7 @@ class AndroidSession:
 
         for future in self._pending.values():
             if not future.done():
-                future.set_exception(ConnectionError("Phone disconnected"))
+                future.set_exception(ConnectionError("Android device disconnected"))
         self._pending.clear()
 
         self.writer.close()

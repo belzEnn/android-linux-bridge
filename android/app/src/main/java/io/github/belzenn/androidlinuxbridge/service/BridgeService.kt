@@ -16,6 +16,7 @@ import io.github.belzenn.androidlinuxbridge.MainActivity
 import io.github.belzenn.androidlinuxbridge.R
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionManager
 import io.github.belzenn.androidlinuxbridge.features.battery.BatteryHandler
+import io.github.belzenn.androidlinuxbridge.features.system.PingHandler
 import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
@@ -40,10 +41,12 @@ class BridgeService : Service() {
         val batteryHandler = BatteryHandler(applicationContext) { level ->
             BridgeState.batteryLevel.intValue = level
         }
+        val pingHandler = PingHandler()
 
         val messageRouter = MessageRouter(
             handlers = mapOf(
-                "battery.get" to batteryHandler::handle
+                "battery.get" to batteryHandler::handle,
+                "system.ping" to pingHandler::handle
             )
         )
 
