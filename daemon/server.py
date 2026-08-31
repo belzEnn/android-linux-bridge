@@ -88,16 +88,37 @@ class DaemonServer:
             if not isinstance(params, dict):
                 raise ProtocolError("Pairing params must be an object")
             device_id, model = params.get("device_id"), params.get("model")
+            token = params.get("pairing_token")
             if not isinstance(device_id, str) or not device_id or not isinstance(model, str) or not model:
                 raise ProtocolError("Pairing request has invalid device data")
-            accepted = await self.pairing.request(device_id, model, str(address[0]))
             request_id = message.get("id")
             if not isinstance(request_id, str):
                 raise ProtocolError("Pairing request has no id")
-            response = make_response(request_id, {"accepted": True}) if accepted else make_error(request_id, "PAIRING_REJECTED", "Connection was not approved")
+            authenticated = self.pairing.authenticate(
+                device_id, token if isinstance(token, str) else None
+            )
+            if authenticated:
+                response = make_response(request_id, {"accepted": True})
+            else:
+                pairing_token = await self.pairing.request(
+                    device_id, model, str(address[0])
+                )
+                authenticated = pairing_token is not None
+                response = (
+                    make_response(
+                        request_id,
+                        {"accepted": True, "pairing_token": pairing_token},
+                    )
+                    if pairing_token is not None
+                    else make_error(
+                        request_id,
+                        "PAIRING_REJECTED",
+                        "Connection was not approved",
+                    )
+                )
             writer.write(encode_message(response))
             await writer.drain()
-            return accepted
+            return authenticated
         except (TimeoutError, ProtocolError, asyncio.TimeoutError) as exception:
             print(f"Pairing failed from {address}: {exception}")
             return False

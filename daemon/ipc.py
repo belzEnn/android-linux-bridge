@@ -60,6 +60,8 @@ class IpcServer:
             "pairing.pending": self._pairing_pending,
             "pairing.respond": self._pairing_respond,
             "pairing.reset": self._pairing_reset,
+            "pairing.trusted": self._pairing_trusted,
+            "pairing.revoke": self._pairing_revoke,
         }
 
     async def start(self) -> None:
@@ -239,6 +241,23 @@ class IpcServer:
     async def _pairing_reset(self, params: Mapping[str, Any]) -> dict[str, bool]:
         del params
         self.pairing.trusted_devices.reset()
+        return {"ok": True}
+
+    async def _pairing_trusted(
+        self, params: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        del params
+        return [
+            {"device_id": device.device_id, "model": device.model}
+            for device in self.pairing.trusted_devices.list()
+        ]
+
+    async def _pairing_revoke(self, params: Mapping[str, Any]) -> dict[str, bool]:
+        device_id = params.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            raise IpcRequestError("INVALID_REQUEST", "Revoke requires a device id")
+        if not self.pairing.trusted_devices.revoke(device_id):
+            raise IpcRequestError("NOT_FOUND", "Trusted device was not found")
         return {"ok": True}
 
 

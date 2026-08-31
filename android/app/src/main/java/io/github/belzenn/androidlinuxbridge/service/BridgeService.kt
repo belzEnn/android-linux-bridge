@@ -53,6 +53,10 @@ class BridgeService : Service() {
             port = serverAddress.port,
             deviceId = ConnectionSettings.deviceId(this),
             deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
+            pairingToken = ConnectionSettings.pairingToken(this),
+            onPairingTokenReceived = { token ->
+                ConnectionSettings.savePairingToken(this, token)
+            },
             messageRouter = messageRouter,
             onStatusChanged = { status ->
                 BridgeState.connectionStatus.value = status

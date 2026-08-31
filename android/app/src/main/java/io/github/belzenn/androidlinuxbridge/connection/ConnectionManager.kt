@@ -33,6 +33,8 @@ class ConnectionManager(
     private val port: Int,
     private val deviceId: String,
     private val deviceModel: String,
+    private val pairingToken: String?,
+    private val onPairingTokenReceived: (String) -> Unit,
     private val messageRouter: MessageRouter,
     private val onStatusChanged: (ConnectionStatus) -> Unit,
     private val onLog: (String) -> Unit
@@ -181,6 +183,11 @@ class ConnectionManager(
                 JSONObject()
                     .put("device_id", deviceId)
                     .put("model", deviceModel)
+                    .apply {
+                        if (!pairingToken.isNullOrBlank()) {
+                            put("pairing_token", pairingToken)
+                        }
+                    }
             )
         sendMessage(pairingRequest)
 
@@ -199,6 +206,13 @@ class ConnectionManager(
         ) {
             throw IOException("Invalid pairing response")
         }
+        message.optJSONObject("result")
+            ?.optString("pairing_token")
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                onPairingTokenReceived(it)
+                notifyLog("Computer pairing saved")
+            }
     }
 
     private fun sendMessage(message: JSONObject) {

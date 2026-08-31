@@ -65,7 +65,7 @@ async def status_command(client: IpcClient) -> bool:
 
 async def help_command(client: IpcClient) -> bool:
     del client
-    print("Commands: battery, devices, status, pairings, reset-trust, help, exit")
+    print("Commands: battery, devices, status, pairings, trusted, revoke <device-id>, reset-trust, help, exit")
     return True
 
 
@@ -143,6 +143,23 @@ async def reset_trust_command(client: IpcClient) -> bool:
     return True
 
 
+async def trusted_command(client: IpcClient) -> bool:
+    devices = await client.request("pairing.trusted")
+    if not isinstance(devices, list) or not devices:
+        print("No trusted Android devices")
+        return True
+    for device in devices:
+        if isinstance(device, dict):
+            print(f"{device.get('device_id')}  {device.get('model')}")
+    return True
+
+
+async def revoke_command(client: IpcClient, device_id: str) -> bool:
+    await client.request("pairing.revoke", {"device_id": device_id})
+    print("Trusted device revoked")
+    return True
+
+
 COMMANDS: dict[str, Command] = {
     "battery": battery_command,
     "devices": devices_command,
@@ -152,6 +169,7 @@ COMMANDS: dict[str, Command] = {
     "y": accept_pairing_command,
     "n": reject_pairing_command,
     "reset-trust": reset_trust_command,
+    "trusted": trusted_command,
     "exit": exit_command,
     "quit": exit_command,
 }
@@ -164,7 +182,7 @@ async def run_cli(client: IpcClient) -> None:
     try:
         while True:
             try:
-                command = (await asyncio.to_thread(input, ">>> ")).strip().lower()
+                command = (await asyncio.to_thread(input, "bridge> ")).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
@@ -172,7 +190,19 @@ async def run_cli(client: IpcClient) -> None:
             if not command:
                 continue
 
-            handler = COMMANDS.get(command)
+            command_name, _, argument = command.partition(" ")
+            command_name = command_name.lower()
+            if command_name == "revoke":
+                if not argument.strip():
+                    print("Usage: revoke <device-id>")
+                    continue
+                try:
+                    await revoke_command(client, argument.strip())
+                except IpcRequestError as exception:
+                    print(f"Command failed [{exception.code}]: {exception}")
+                continue
+
+            handler = COMMANDS.get(command_name)
             if handler is None:
                 print(f"Unknown command: {command}")
                 continue
