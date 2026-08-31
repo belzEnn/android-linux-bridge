@@ -16,6 +16,7 @@ from .protocol import (
     make_response,
 )
 from .server import SessionRegistry
+from .pairing import PairingManager
 
 
 def get_ipc_socket_path() -> Path:
@@ -42,9 +43,11 @@ class IpcServer:
     def __init__(
         self,
         registry: SessionRegistry,
+        pairing: PairingManager | None = None,
         socket_path: Path | None = None,
     ) -> None:
         self.registry = registry
+        self.pairing = pairing or PairingManager()
         self.socket_path = socket_path or get_ipc_socket_path()
         self._server: asyncio.Server | None = None
         self._handlers: dict[
@@ -54,6 +57,9 @@ class IpcServer:
             "battery.get": self._battery_get,
             "devices.list": self._devices_list,
             "daemon.status": self._daemon_status,
+            "pairing.pending": self._pairing_pending,
+            "pairing.respond": self._pairing_respond,
+            "pairing.reset": self._pairing_reset,
         }
 
     async def start(self) -> None:
@@ -205,6 +211,35 @@ class IpcServer:
             "running": True,
             "connected_devices": len(self.registry.sessions),
         }
+
+    async def _pairing_pending(
+        self, params: Mapping[str, Any],
+    ) -> list[dict[str, str]]:
+        del params
+        return [
+            {
+                "id": request.id,
+                "model": request.model,
+                "address": request.address,
+            }
+            for request in self.pairing.pending()
+        ]
+
+    async def _pairing_respond(self, params: Mapping[str, Any]) -> dict[str, bool]:
+        request_id = params.get("id")
+        accepted = params.get("accepted")
+        if not isinstance(request_id, str) or not isinstance(accepted, bool):
+            raise IpcRequestError(
+                "INVALID_REQUEST", "Pairing response requires id and accepted"
+            )
+        if not self.pairing.respond(request_id, accepted):
+            raise IpcRequestError("NOT_FOUND", "Pairing request is no longer pending")
+        return {"ok": True}
+
+    async def _pairing_reset(self, params: Mapping[str, Any]) -> dict[str, bool]:
+        del params
+        self.pairing.trusted_devices.reset()
+        return {"ok": True}
 
 
 class IpcClient:

@@ -4,11 +4,13 @@ import sys
 
 from .ipc import IpcServer, IpcStartupError
 from .server import DaemonServer
+from .discovery import MdnsAdvertisement
 
 
 async def main() -> None:
     server = DaemonServer()
-    ipc_server = IpcServer(server.registry)
+    advertisement = MdnsAdvertisement(server.port)
+    ipc_server = IpcServer(server.registry, server.pairing)
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -16,8 +18,8 @@ async def main() -> None:
         loop.add_signal_handler(signal_name, stop_event.set)
 
     await server.start()
-
     try:
+        await advertisement.start()
         await ipc_server.start()
         try:
             print("Daemon is running...")
@@ -25,6 +27,7 @@ async def main() -> None:
         finally:
             await ipc_server.close()
     finally:
+        await advertisement.close()
         await server.close()
 
 

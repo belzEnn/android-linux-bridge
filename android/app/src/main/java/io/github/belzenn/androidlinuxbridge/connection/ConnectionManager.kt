@@ -22,6 +22,7 @@ import java.net.Socket
 
 enum class ConnectionStatus {
     CONNECTING,
+    AWAITING_APPROVAL,
     CONNECTED,
     DISCONNECTED,
     RECONNECT_REQUIRED
@@ -30,6 +31,8 @@ enum class ConnectionStatus {
 class ConnectionManager(
     private val host: String,
     private val port: Int,
+    private val deviceId: String,
+    private val deviceModel: String,
     private val messageRouter: MessageRouter,
     private val onStatusChanged: (ConnectionStatus) -> Unit,
     private val onLog: (String) -> Unit
@@ -98,6 +101,9 @@ class ConnectionManager(
                         connectedSocket.getOutputStream()
                     )
                 )
+                notifyStatus(ConnectionStatus.AWAITING_APPROVAL)
+                notifyLog("Waiting for computer approval")
+                performPairing(connectedSocket)
                 failedAttempts = 0
 
                 notifyStatus(ConnectionStatus.CONNECTED)
@@ -162,6 +168,36 @@ class ConnectionManager(
 
         if (running) {
             notifyLog("Connection closed by daemon")
+        }
+    }
+
+    private fun performPairing(connectedSocket: Socket) {
+        val pairingRequest = JSONObject()
+            .put("kind", "request")
+            .put("id", "pairing")
+            .put("method", "pairing.request")
+            .put(
+                "params",
+                JSONObject()
+                    .put("device_id", deviceId)
+                    .put("model", deviceModel)
+            )
+        sendMessage(pairingRequest)
+
+        val response = BufferedReader(
+            InputStreamReader(connectedSocket.getInputStream())
+        ).readLine() ?: throw IOException("Computer closed pairing request")
+        val message = JSONObject(response)
+        val error = message.optJSONObject("error")
+        if (error != null) {
+            throw IOException(error.optString("message", "Pairing rejected"))
+        }
+        if (
+            message.optString("kind") != "response" ||
+            message.optString("id") != "pairing" ||
+            message.optJSONObject("result")?.optBoolean("accepted") != true
+        ) {
+            throw IOException("Invalid pairing response")
         }
     }
 

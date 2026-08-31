@@ -4,6 +4,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
+import io.github.belzenn.androidlinuxbridge.discovery.DiscoveredComputer
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -13,6 +14,7 @@ object BridgeState {
     val serverHost = mutableStateOf("")
     val serverPort = mutableIntStateOf(0)
     val logs = mutableStateListOf<String>()
+    val computers = mutableStateListOf<DiscoveredComputer>()
 
     fun updateServer(host: String, port: Int) {
         serverHost.value = host
@@ -30,6 +32,11 @@ object BridgeState {
 
     fun clearLogs() {
         logs.clear()
+    }
+
+    fun updateComputers(discovered: List<DiscoveredComputer>) {
+        computers.clear()
+        computers.addAll(discovered)
     }
 
     private const val MAX_LOGS = 200

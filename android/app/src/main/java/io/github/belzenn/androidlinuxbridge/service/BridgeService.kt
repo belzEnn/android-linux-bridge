@@ -21,7 +21,7 @@ import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class BridgeService : Service() {
-    private lateinit var connectionManager: ConnectionManager
+    private var connectionManager: ConnectionManager? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -29,13 +29,11 @@ class BridgeService : Service() {
         createNotificationChannel()
         startAsForegroundService()
 
-        createConnectionManager()
-
         BridgeState.addLog("Bridge service started")
     }
 
     private fun createConnectionManager() {
-        val serverAddress = ConnectionSettings.load(this)
+        val serverAddress = ConnectionSettings.loadServer(this) ?: return
         BridgeState.updateServer(serverAddress.host, serverAddress.port)
 
         val batteryHandler = BatteryHandler(applicationContext) { level ->
@@ -53,6 +51,8 @@ class BridgeService : Service() {
         connectionManager = ConnectionManager(
             host = serverAddress.host,
             port = serverAddress.port,
+            deviceId = ConnectionSettings.deviceId(this),
+            deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
             messageRouter = messageRouter,
             onStatusChanged = { status ->
                 BridgeState.connectionStatus.value = status
@@ -71,16 +71,16 @@ class BridgeService : Service() {
         startId: Int
     ): Int {
         when (intent?.action) {
-            ACTION_RECONNECT -> connectionManager.reconnect()
+            ACTION_RECONNECT -> connectionManager?.reconnect()
             ACTION_APPLY_SETTINGS -> applyConnectionSettings()
-            else -> connectionManager.start()
+            else -> Unit
         }
 
         return START_STICKY
     }
 
     override fun onDestroy() {
-        connectionManager.stop()
+        connectionManager?.stop()
         BridgeState.connectionStatus.value =
             io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus.DISCONNECTED
         BridgeState.addLog("Bridge service stopped")
@@ -91,9 +91,9 @@ class BridgeService : Service() {
 
     private fun applyConnectionSettings() {
         BridgeState.addLog("Applying connection settings")
-        connectionManager.stop()
+        connectionManager?.stop()
         createConnectionManager()
-        connectionManager.start()
+        connectionManager?.start()
     }
 
     private fun startAsForegroundService() {
