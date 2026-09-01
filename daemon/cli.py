@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from .ipc import IpcClient, IpcRequestError
+from .api.ipc import IpcClient, IpcRequestError
 
 
 Command = Callable[[IpcClient], Awaitable[bool]]

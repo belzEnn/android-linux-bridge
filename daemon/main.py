@@ -2,9 +2,9 @@ import asyncio
 import signal
 import sys
 
-from .ipc import IpcServer, IpcStartupError
-from .server import DaemonServer
-from .discovery import MdnsAdvertisement
+from .api.ipc import IpcServer, IpcStartupError
+from .transport.android_server import DaemonServer
+from .transport.discovery import MdnsAdvertisement
 
 
 async def main() -> None:
