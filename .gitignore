@@ -30,6 +30,11 @@ captures/
 .externalNativeBuild/
 .cxx/
 
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
 # Other
 .env
 .env.*
@@ -37,5 +42,4 @@ captures/
 *.log
 .DS_Store
 Thumbs.db
-
 .vscode/

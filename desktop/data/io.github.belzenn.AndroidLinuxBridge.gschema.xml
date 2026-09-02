@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.belzenn.AndroidLinuxBridge" path="/io/github/belzenn/AndroidLinuxBridge/">
+    <key name="color-scheme" type="s">
+      <default>'system'</default>
+      <choices>
+        <choice value="system"/>
+        <choice value="light"/>
+        <choice value="dark"/>
+      </choices>
+    </key>
+  </schema>
+</schemalist>
