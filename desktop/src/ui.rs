@@ -429,10 +429,10 @@ fn show_new_pairings(
         }
         let dialog = adw::AlertDialog::new(
             Some("Pair new device?"),
-            Some(&format!("{} from {}", request.model, request.address)),
+            Some(&format!("{} from {}\n\nCompare this SHA-256 key fingerprint with your phone. Approve only if every group matches.\n\n{}", request.model, request.address, request.fingerprint.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" "))),
         );
         dialog.add_responses(&[("deny", "Deny"), ("allow", "Allow")]);
-        dialog.set_default_response(Some("allow"));
+        dialog.set_default_response(Some("deny"));
         dialog.set_response_appearance("allow", adw::ResponseAppearance::Suggested);
         let sender = command_tx.clone();
         dialog.choose(

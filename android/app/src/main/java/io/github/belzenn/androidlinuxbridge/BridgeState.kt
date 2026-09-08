@@ -9,6 +9,8 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 object BridgeState {
+    val pairingFingerprint = mutableStateOf<String?>(null)
+    var confirmFingerprint: ((Boolean) -> Unit)? = null
     val batteryLevel = mutableIntStateOf(-1)
     val connectionStatus = mutableStateOf(ConnectionStatus.DISCONNECTED)
     val serverHost = mutableStateOf("")

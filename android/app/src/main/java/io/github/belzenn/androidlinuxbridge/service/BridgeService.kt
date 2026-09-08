@@ -37,6 +37,7 @@ class BridgeService : Service() {
     private var destroyed = false
     private var network: Network? = null
     private var pairingRejected = false
+    private var connectionGeneration = 0
     private val refreshDiscovery = object : Runnable {
         override fun run() {
             if (destroyed) return
@@ -113,14 +114,24 @@ class BridgeService : Service() {
             )
         )
 
+        val computer = ConnectionSettings.preferredServiceName(this) ?: return
+        val generation = connectionGeneration
         connectionManager = ConnectionManager(
             host = serverAddress.host,
             port = serverAddress.port,
             deviceId = ConnectionSettings.deviceId(this),
             deviceModel = "${Build.MANUFACTURER} ${Build.MODEL}",
             pairingToken = ConnectionSettings.pairingToken(this),
-            onPairingTokenReceived = { token ->
-                ConnectionSettings.savePairingToken(this, token)
+            onPairingTokenReceived = {},
+            pinnedKey = ConnectionSettings.pinnedKey(this),
+            onTrustReceived = { fingerprint, token ->
+                ConnectionSettings.saveTrust(this, computer, fingerprint, token)
+            },
+            onFingerprint = { fingerprint, respond ->
+                if (generation == connectionGeneration && !destroyed) {
+                    BridgeState.pairingFingerprint.value = fingerprint
+                    BridgeState.confirmFingerprint = respond
+                }
             },
             messageRouter = messageRouter,
             onStatusChanged = { status ->
@@ -147,6 +158,13 @@ class BridgeService : Service() {
             return START_NOT_STICKY
         }
         when (intent?.action) {
+            ACTION_FORGET_PAIRING -> {
+                connectionManager?.stop()
+                connectionManager = null
+                ConnectionSettings.clearPairingToken(this)
+                pairingRejected = false
+                applyConnectionSettings()
+            }
             ACTION_RECONNECT -> {
                 pairingRejected = false
                 if (connectionManager == null) applyConnectionSettings()
@@ -164,6 +182,8 @@ class BridgeService : Service() {
 
     override fun onDestroy() {
         destroyed = true
+        BridgeState.pairingFingerprint.value = null
+        BridgeState.confirmFingerprint = null
         discovery.stop()
         runCatching { connectivity.unregisterNetworkCallback(networkCallback) }
         handler.removeCallbacksAndMessages(null)
@@ -178,6 +198,9 @@ class BridgeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun applyConnectionSettings() {
+        connectionGeneration++
+        BridgeState.pairingFingerprint.value = null
+        BridgeState.confirmFingerprint = null
         BridgeState.addLog("Applying connection settings")
         connectionManager?.stop()
         connectionManager = null
@@ -231,6 +254,8 @@ class BridgeService : Service() {
     companion object {
         private const val CHANNEL_ID = "bridge_connection"
         private const val NOTIFICATION_ID = 1
+        private const val ACTION_FORGET_PAIRING =
+            "io.github.belzenn.androidlinuxbridge.action.FORGET_PAIRING"
         private const val ACTION_RECONNECT =
             "io.github.belzenn.androidlinuxbridge.action.RECONNECT"
         private const val ACTION_APPLY_SETTINGS =
@@ -251,6 +276,11 @@ class BridgeService : Service() {
                     action = ACTION_RECONNECT
                 }
             )
+        }
+
+        fun forgetPairing(context: Context) {
+            ContextCompat.startForegroundService(context,
+                Intent(context, BridgeService::class.java).apply { action = ACTION_FORGET_PAIRING })
         }
 
         fun applySettings(context: Context) {

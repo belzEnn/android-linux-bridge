@@ -73,6 +73,17 @@ fun BridgeApp(
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     AndroidLinuxBridgeTheme(darkTheme = dark, dynamicColor = false) {
+        BridgeState.pairingFingerprint.value?.let { fingerprint ->
+            AlertDialog(
+                onDismissRequest = { BridgeState.confirmFingerprint?.invoke(false) },
+                title = { Text("Verify computer key") },
+                text = { Text("Compare every group with the fingerprint shown on your Linux computer.\n\n" +
+                    fingerprint.chunked(4).joinToString(" "), fontFamily = FontFamily.Monospace) },
+                confirmButton = { TextButton(onClick = { BridgeState.confirmFingerprint?.invoke(true) }) { Text("Fingerprints match") } },
+                dismissButton = { TextButton(onClick = { BridgeState.confirmFingerprint?.invoke(false) }) { Text("Cancel") } }
+            )
+        }
+
         val setupContent: @Composable () -> Unit = {
             SetupOptions(setup, onNotificationAccess, onPermissions, onAppSettings, onNotificationSettings, onBatterySettings)
         }
@@ -259,6 +270,18 @@ private fun SetupRow(title: String, description: String, enabled: Boolean, onCli
 
 @Composable
 private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredComputer) -> Unit, setupComplete: Boolean, onSetup: () -> Unit) {
+    val context = LocalContext.current
+    var forget by remember { mutableStateOf(false) }
+    if (forget) AlertDialog(
+        onDismissRequest = { forget = false },
+        title = { Text("Forget computer key?") },
+        text = { Text("A new pairing will require comparing fingerprints on both devices. Continue only if you intended to reset trust.") },
+        confirmButton = { TextButton(onClick = {
+            io.github.belzenn.androidlinuxbridge.service.BridgeService.forgetPairing(context)
+            forget = false
+        }) { Text("Forget and pair again") } },
+        dismissButton = { TextButton(onClick = { forget = false }) { Text("Cancel") } }
+    )
     var showComputers by rememberSaveable { mutableStateOf(false) }
     val status = BridgeState.connectionStatus.value
     val foreground = MaterialTheme.colorScheme.onSurface
@@ -299,6 +322,7 @@ private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredCom
         if (showComputers) NearbyComputers(onComputerSelected)
         if (BridgeState.serverHost.value.isNotBlank() && status != ConnectionStatus.CONNECTED && status != ConnectionStatus.CONNECTING) {
             OutlinedButton(onClick = onReconnect) { Text("Reconnect") }
+            TextButton(onClick = { forget = true }) { Text("Forget pairing") }
         }
         if (!setupComplete) TextButton(onClick = onSetup) { Text("Finish setup") }
     }

@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+from .tls import server_identity
 
 from .android_session import AndroidSession
 from ..domain.pairing import PairingManager
@@ -34,13 +36,18 @@ class DaemonServer:
         self.on_event = None
         self.pairing = PairingManager()
         self._server: asyncio.Server | None = None
+        self._clients: set[asyncio.Task] = set()
 
     async def start(self) -> None:
+        tls, self.pairing.fingerprint = server_identity()
         self._server = await asyncio.start_server(
             self._handle_client,
             host=self.host,
             port=self.port,
             limit=MAX_MESSAGE_BYTES,
+            ssl=tls,
+            ssl_handshake_timeout=10.0,
+            ssl_shutdown_timeout=3.0,
         )
         print(f"Daemon listening on {self.host}:{self.port}")
 
@@ -51,18 +58,31 @@ class DaemonServer:
         self._server.close()
         await self._server.wait_closed()
 
-        for session in self.registry.sessions:
-            await session.close()
+        for task in tuple(self._clients):
+            task.cancel()
+        await asyncio.gather(*self._clients, return_exceptions=True)
 
     async def _handle_client(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        task = asyncio.current_task()
+        self._clients.add(task)
+        try:
+            await self._run_client(reader, writer)
+        finally:
+            self._clients.discard(task)
+            writer.close()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+
+    async def _run_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         identity = await self._pair_client(reader, writer)
         if identity is None:
             writer.close()
-            await writer.wait_closed()
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
             return
 
         device_id, model = identity
@@ -104,25 +124,37 @@ class DaemonServer:
             if authenticated:
                 response = make_response(request_id, {"accepted": True})
             else:
-                pairing_token = await self.pairing.request(
-                    device_id, model, str(address[0])
-                )
-                authenticated = pairing_token is not None
-                response = (
-                    make_response(
-                        request_id,
-                        {"accepted": True, "pairing_token": pairing_token},
-                    )
-                    if pairing_token is not None
-                    else make_error(
-                        request_id,
-                        "PAIRING_REJECTED",
-                        "Connection was not approved",
-                    )
-                )
+                if token is not None:
+                    response = make_error(request_id, "PAIRING_REJECTED", "Pairing expired or revoked; forget this computer and pair again")
+                else:
+                    # Both approvals belong to this connection; never issue a token on disconnect.
+                    writer.write(encode_message(make_response(request_id, {"confirmation_required": True})))
+                    await writer.drain()
+                    approval = asyncio.create_task(self.pairing.request(device_id, model, str(address[0])))
+                    try:
+                        confirmation = decode_message(await asyncio.wait_for(reader.readline(), 60.0))
+                        if (confirmation.get("method") != "pairing.confirm" or
+                                confirmation.get("kind") != "request" or
+                                confirmation.get("id") != "confirm" or
+                                confirmation.get("params") != {"accepted": True}):
+                            raise ProtocolError("Phone did not confirm fingerprint")
+                        # Watch for disconnect while the desktop approval is pending.
+                        disconnected = asyncio.create_task(reader.read(1))
+                        try:
+                            done, _ = await asyncio.wait({approval, disconnected}, return_when=asyncio.FIRST_COMPLETED)
+                            authenticated = disconnected not in done and await approval
+                        finally:
+                            disconnected.cancel()
+                            await asyncio.gather(disconnected, return_exceptions=True)
+                        response = (make_response("confirm", {"accepted": True,
+                            "pairing_token": self.pairing.trusted_devices.issue_token(device_id, model)})
+                            if authenticated else make_error("confirm", "PAIRING_REJECTED", "Connection was not approved"))
+                    finally:
+                        approval.cancel()
+                        await asyncio.gather(approval, return_exceptions=True)
             writer.write(encode_message(response))
             await writer.drain()
             return (device_id, model) if authenticated else None
-        except (TimeoutError, ProtocolError, asyncio.TimeoutError) as exception:
+        except (TimeoutError, ProtocolError, ConnectionError, ValueError) as exception:
             print(f"Pairing failed from {address}: {exception}")
             return None

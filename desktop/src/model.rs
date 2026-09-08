@@ -23,6 +23,7 @@ pub struct PairingRequest {
     pub id: String,
     pub model: String,
     pub address: String,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

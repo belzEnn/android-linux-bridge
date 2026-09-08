@@ -126,6 +126,6 @@ class ComputerDiscoveryManager(
 
     private companion object {
         const val SERVICE_TYPE = "_albridge._tcp."
-        const val PROTOCOL_VERSION = "1"
+        const val PROTOCOL_VERSION = "2"
     }
 }

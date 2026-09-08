@@ -18,14 +18,14 @@ import java.util.concurrent.TimeUnit
 @RunWith(AndroidJUnit4::class)
 class NotificationTransportTest {
     @Test fun eventsWaitForPairingAndDoNotCorruptResponses() {
-        val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
+        val server = TlsTestServer.open()
         val executor = Executors.newSingleThreadExecutor()
         val pairingReceived = CountDownLatch(1)
         val prePairingAttempted = CountDownLatch(1)
         val connected = CountDownLatch(1)
         val manager = ConnectionManager("127.0.0.1", server.localPort, "test", "Test phone", null, {},
             MessageRouter(mapOf("system.ping" to { JSONObject().put("pong", true) })),
-            { if (it == ConnectionStatus.CONNECTED) connected.countDown() }, {})
+            { if (it == ConnectionStatus.CONNECTED) connected.countDown() }, {}, pinnedKey = TlsTestServer.pin)
         val future = executor.submit<List<JSONObject>> {
             server.accept().use { socket ->
                 val reader = socket.getInputStream().bufferedReader(Charsets.UTF_8)

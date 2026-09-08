@@ -59,15 +59,26 @@ object ConnectionSettings {
         }
     }
 
-    fun pairingToken(context: Context): String? =
-        securePreferences(context).getString(PAIRING_TOKEN_KEY, null)
+    private fun trustKey(context: Context): String =
+        "tls_v2:" + (preferredServiceName(context) ?: error("No selected computer"))
 
-    fun savePairingToken(context: Context, token: String) {
-        securePreferences(context).edit().putString(PAIRING_TOKEN_KEY, token).apply()
+    fun pairingToken(context: Context): String? = trust(context)?.optString("token")
+    fun pinnedKey(context: Context): String? = trust(context)?.optString("fingerprint")
+
+    private fun trust(context: Context): org.json.JSONObject? {
+        val preferences = securePreferences(context)
+        // Remove the token used by the old plaintext protocol.
+        if (preferences.contains(PAIRING_TOKEN_KEY)) preferences.edit().remove(PAIRING_TOKEN_KEY).commit()
+        return preferences.getString(trustKey(context), null)?.let { org.json.JSONObject(it) }
+    }
+
+    fun saveTrust(context: Context, computer: String, fingerprint: String, token: String) {
+        check(securePreferences(context).edit().putString("tls_v2:" + computer,
+            org.json.JSONObject().put("fingerprint", fingerprint).put("token", token).toString()).commit())
     }
 
     fun clearPairingToken(context: Context) {
-        securePreferences(context).edit().remove(PAIRING_TOKEN_KEY).apply()
+        securePreferences(context).edit().remove(trustKey(context)).remove(PAIRING_TOKEN_KEY).commit()
     }
 
     private fun preferences(context: Context) =

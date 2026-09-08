@@ -63,18 +63,20 @@ class AutomaticConnectionTest {
     }
 
     @Test fun reconnectUsesTokenReceivedOnFirstConnection() {
-        val server = ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))
+        val server = TlsTestServer.open()
         server.soTimeout = 10000
         val executor = Executors.newSingleThreadExecutor()
         val connected = CountDownLatch(1)
         val manager = ConnectionManager("127.0.0.1", server.localPort, "test", "Test", null, {},
             MessageRouter(emptyMap()),
-            { if (it == ConnectionStatus.CONNECTED) connected.countDown() }, {})
+            { if (it == ConnectionStatus.CONNECTED) connected.countDown() }, {}, onFingerprint = { _, respond -> respond?.invoke(true) })
         val result = executor.submit<String> {
             server.accept().use { socket ->
                 val reader = socket.getInputStream().bufferedReader()
                 assertFalse(JSONObject(reader.readLine()).getJSONObject("params").has("pairing_token"))
-                socket.getOutputStream().write(("{\"kind\":\"response\",\"id\":\"pairing\",\"result\":" +
+                socket.getOutputStream().write("{\"kind\":\"response\",\"id\":\"pairing\",\"result\":{\"confirmation_required\":true}}\n".toByteArray())
+                assertEquals("pairing.confirm", JSONObject(reader.readLine()).getString("method"))
+                socket.getOutputStream().write(("{\"kind\":\"response\",\"id\":\"confirm\",\"result\":" +
                     "{\"accepted\":true,\"pairing_token\":\"saved-token\"}}\n").toByteArray())
                 // Keep the first connection alive until manual reconnect closes it.
                 reader.readLine()
@@ -104,12 +106,12 @@ class AutomaticConnectionTest {
         val manager = ConnectionManager("127.0.0.1", port, "test", "Test", "token", {},
             MessageRouter(emptyMap()),
             { if (it == ConnectionStatus.CONNECTED) connected.countDown() },
-            { if (it.startsWith("Connection error:")) failures.countDown() })
+            { if (it.startsWith("Connection error:")) failures.countDown() }, pinnedKey = TlsTestServer.pin)
         try {
             manager.start()
             manager.start() // Starting twice must still leave only one connection loop.
             assertTrue("Retries stopped before four failures", failures.await(50, TimeUnit.SECONDS))
-            ServerSocket(port, 1, address).use { server ->
+            TlsTestServer.open(port).use { server ->
                 server.soTimeout = 50000
                 server.accept().use { socket ->
                     socket.getInputStream().bufferedReader().readLine()
@@ -124,11 +126,11 @@ class AutomaticConnectionTest {
     }
 
     @Test fun pairingRejectionWaitsForManualRetry() {
-        val server = ServerSocket(0, 2, InetAddress.getByName("127.0.0.1"))
+        val server = TlsTestServer.open()
         val rejected = CountDownLatch(1)
         val manager = ConnectionManager("127.0.0.1", server.localPort, "test", "Test", null, {},
             MessageRouter(emptyMap()),
-            { if (it == ConnectionStatus.RECONNECT_REQUIRED) rejected.countDown() }, {})
+            { if (it == ConnectionStatus.RECONNECT_REQUIRED) rejected.countDown() }, {}, pinnedKey = TlsTestServer.pin)
         try {
             server.soTimeout = 5000
             manager.start()

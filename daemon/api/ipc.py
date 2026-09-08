@@ -261,6 +261,7 @@ class IpcServer:
                 "id": request.id,
                 "model": request.model,
                 "address": request.address,
+                "fingerprint": request.fingerprint,
             }
             for request in self.pairing.pending()
         ]
@@ -278,7 +279,10 @@ class IpcServer:
 
     async def _pairing_reset(self, params: Mapping[str, Any]) -> dict[str, bool]:
         del params
+        self.pairing.cancel_pending()
         self.pairing.trusted_devices.reset()
+        for session in self.registry.sessions:
+            await session.close()
         return {"ok": True}
 
     async def _pairing_trusted(
@@ -294,8 +298,12 @@ class IpcServer:
         device_id = params.get("device_id")
         if not isinstance(device_id, str) or not device_id:
             raise IpcRequestError("INVALID_REQUEST", "Revoke requires a device id")
+        self.pairing.cancel_pending(device_id)
         if not self.pairing.trusted_devices.revoke(device_id):
             raise IpcRequestError("NOT_FOUND", "Trusted device was not found")
+        for session in self.registry.sessions:
+            if session.device_id == device_id:
+                await session.close()
         return {"ok": True}
 
 

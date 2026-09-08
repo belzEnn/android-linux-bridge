@@ -5,7 +5,7 @@ import socket
 from pathlib import Path
 
 SERVICE_TYPE = "_albridge._tcp.local."
-PROTOCOL_VERSION = "1"
+PROTOCOL_VERSION = "2"
 
 
 def linux_distribution() -> str:
