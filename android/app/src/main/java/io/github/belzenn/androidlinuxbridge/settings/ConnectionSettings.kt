@@ -8,6 +8,11 @@ import java.util.UUID
 data class ServerAddress(val host: String, val port: Int, val computerName: String, val distribution: String)
 
 object ConnectionSettings {
+    fun hasLocalNetworkPermission(context: Context): Boolean =
+        android.os.Build.VERSION.SDK_INT < 37 || context.checkSelfPermission(
+            android.Manifest.permission.ACCESS_LOCAL_NETWORK
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
     private const val PREFERENCES_NAME = "bridge_connection"
     private const val HOST_KEY = "server_host"
     private const val COMPUTER_NAME_KEY = "computer_name"

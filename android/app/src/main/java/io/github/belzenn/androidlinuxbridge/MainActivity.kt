@@ -35,7 +35,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private lateinit var discovery: ComputerDiscoveryManager
-    private var preferredServiceAttempted = false
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
@@ -53,12 +52,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         discovery = ComputerDiscoveryManager(this, { computers ->
             BridgeState.updateComputers(computers)
-            val preferred = ConnectionSettings.preferredServiceName(this)
-            val computer = computers.firstOrNull { it.serviceName == preferred }
-            if (!preferredServiceAttempted && computer != null) {
-                preferredServiceAttempted = true
-                selectComputer(computer)
-            }
         }, BridgeState::addLog)
         ConnectionSettings.loadServer(this)?.let { BridgeState.updateServer(it.host, it.port, it.computerName, it.distribution) }
 
@@ -132,6 +125,5 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasLocalNetworkPermission(): Boolean =
-        Build.VERSION.SDK_INT < 37 ||
-            checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED
+        ConnectionSettings.hasLocalNetworkPermission(this)
 }

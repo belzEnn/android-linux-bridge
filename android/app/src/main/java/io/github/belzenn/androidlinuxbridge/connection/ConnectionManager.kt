@@ -7,7 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
@@ -34,7 +34,7 @@ class ConnectionManager(
     private val port: Int,
     private val deviceId: String,
     private val deviceModel: String,
-    private val pairingToken: String?,
+    private var pairingToken: String?,
     private val onPairingTokenReceived: (String) -> Unit,
     private val messageRouter: MessageRouter,
     private val onStatusChanged: (ConnectionStatus) -> Unit,
@@ -53,6 +53,8 @@ class ConnectionManager(
 
     private var writer: BufferedWriter? = null
     @Volatile private var authenticated = false
+    private val wakeUp = Channel<Unit>(Channel.CONFLATED)
+    @Volatile private var stopped = false
     private val events = Channel<Pair<Socket, JSONObject>>(100)
 
     init {
@@ -76,7 +78,7 @@ class ConnectionManager(
     }
 
     fun start() {
-        if (running) return
+        if (running || stopped) return
 
         running = true
         scope.launch {
@@ -85,43 +87,47 @@ class ConnectionManager(
     }
 
     fun reconnect() {
-        if (running) {
-            notifyLog("Connection attempt is already running")
-            return
-        }
-
-        notifyLog("Manual reconnect requested")
+        if (stopped) return
+        notifyLog("Reconnect requested")
+        closeConnection()
+        wakeUp.trySend(Unit)
         start()
     }
 
     fun stop() {
+        stopped = true
         running = false
         closeConnection()
+        wakeUp.cancel()
         events.cancel()
         scope.cancel()
     }
 
     private suspend fun connectionLoop() {
-        var failedAttempts = 0
+        val retry = ReconnectPolicy()
 
         while (running && scope.isActive) {
-            var connectionEstablished = false
+            var rejected = false
 
             notifyStatus(ConnectionStatus.CONNECTING)
-            notifyLog(
-                "Connecting to $host:$port " +
-                        "(attempt ${failedAttempts + 1} of $MAX_ATTEMPTS)..."
-            )
+            notifyLog("Connecting to $host:$port...")
 
             try {
                 val serverAddress = InetSocketAddress(host, port)
                 val connectedSocket = Socket().apply {
+                    socket = this
+                    if (!running) {
+                        close()
+                        throw IOException("Connection stopped")
+                    }
                     keepAlive = true
                     connect(serverAddress, CONNECT_TIMEOUT_MS)
                 }
 
-                connectionEstablished = true
-                socket = connectedSocket
+                if (!running) {
+                    connectedSocket.close()
+                    break
+                }
                 writer = BufferedWriter(
                     OutputStreamWriter(
                         connectedSocket.getOutputStream(), Charsets.UTF_8
@@ -132,13 +138,14 @@ class ConnectionManager(
                 val reader = BufferedReader(InputStreamReader(connectedSocket.getInputStream(), Charsets.UTF_8))
                 performPairing(reader)
                 authenticated = true
-                failedAttempts = 0
+                retry.reset()
 
                 notifyStatus(ConnectionStatus.CONNECTED)
                 notifyLog("Connected to Linux daemon")
 
                 listenForMessages(reader)
             } catch (exception: Exception) {
+                rejected = exception is PairingRejectedException
                 if (running) {
                     notifyLog(
                         "Connection error: " +
@@ -147,28 +154,22 @@ class ConnectionManager(
                     )
                 }
             } finally {
-                if (!connectionEstablished) {
-                    failedAttempts++
-                }
-
                 closeConnection()
                 notifyStatus(ConnectionStatus.DISCONNECTED)
             }
 
             if (!running) break
 
-            if (failedAttempts >= MAX_ATTEMPTS) {
-                running = false
+            if (rejected) {
                 notifyStatus(ConnectionStatus.RECONNECT_REQUIRED)
-                notifyLog(
-                    "Automatic reconnect stopped after " +
-                            "$MAX_ATTEMPTS failed attempts"
-                )
-                break
+                notifyLog("Pairing rejected; manual reconnect required")
+                wakeUp.receive()
+                retry.reset()
+            } else {
+                val delayMs = retry.nextDelayMs()
+                notifyLog("Reconnecting in ${delayMs / 1000} seconds")
+                withTimeoutOrNull(delayMs) { wakeUp.receive() }
             }
-
-            notifyLog("Reconnecting in 5 seconds")
-            delay(RECONNECT_DELAY_MS)
         }
     }
 
@@ -215,7 +216,7 @@ class ConnectionManager(
         val message = JSONObject(response)
         val error = message.optJSONObject("error")
         if (error != null) {
-            throw IOException(error.optString("message", "Pairing rejected"))
+            throw PairingRejectedException(error.optString("message", "Pairing rejected"))
         }
         if (
             message.optString("kind") != "response" ||
@@ -228,7 +229,8 @@ class ConnectionManager(
             ?.optString("pairing_token")
             ?.takeIf { it.isNotBlank() }
             ?.let {
-                onPairingTokenReceived(it)
+                pairingToken = it
+                if (!stopped) onPairingTokenReceived(it)
                 notifyLog("Computer pairing saved")
             }
     }
@@ -265,19 +267,19 @@ class ConnectionManager(
 
     private fun notifyStatus(status: ConnectionStatus) {
         mainHandler.post {
-            onStatusChanged(status)
+            if (!stopped) onStatusChanged(status)
         }
     }
 
     private fun notifyLog(message: String) {
         mainHandler.post {
-            onLog(message)
+            if (!stopped) onLog(message)
         }
     }
 
     private companion object {
-        const val MAX_ATTEMPTS = 3
         const val CONNECT_TIMEOUT_MS = 3_000
-        const val RECONNECT_DELAY_MS = 5_000L
     }
 }
+
+private class PairingRejectedException(message: String) : IOException(message)

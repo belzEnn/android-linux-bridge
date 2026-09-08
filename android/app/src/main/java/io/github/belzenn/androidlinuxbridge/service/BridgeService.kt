@@ -11,6 +11,12 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
+import android.net.ConnectivityManager
+import android.net.Network
+import io.github.belzenn.androidlinuxbridge.discovery.ComputerDiscoveryManager
+import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.github.belzenn.androidlinuxbridge.BridgeState
@@ -25,12 +31,67 @@ import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 class BridgeService : Service() {
     private var connectionManager: ConnectionManager? = null
 
+    private val handler = Handler(Looper.getMainLooper())
+    private lateinit var discovery: ComputerDiscoveryManager
+    private lateinit var connectivity: ConnectivityManager
+    private var destroyed = false
+    private var network: Network? = null
+    private var pairingRejected = false
+    private val refreshDiscovery = object : Runnable {
+        override fun run() {
+            if (destroyed) return
+            if (network != null && ConnectionSettings.hasLocalNetworkPermission(this@BridgeService) &&
+                BridgeState.connectionStatus.value != ConnectionStatus.CONNECTED) {
+                discovery.stop()
+                discovery.start()
+            }
+            handler.postDelayed(this, 60_000L)
+        }
+    }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(available: Network) { handler.post {
+            if (!destroyed && network != available) {
+                network = available
+                discovery.stop()
+                if (ConnectionSettings.hasLocalNetworkPermission(this@BridgeService)) discovery.start()
+                if (!pairingRejected) applyConnectionSettings()
+            }
+        } }
+        override fun onLost(lost: Network) { handler.post {
+            if (!destroyed && network == lost) {
+                network = null
+                discovery.stop()
+                connectionManager?.stop()
+                connectionManager = null
+                BridgeState.connectionStatus.value = ConnectionStatus.DISCONNECTED
+            }
+        } }
+    }
+
     override fun onCreate() {
         super.onCreate()
 
         createNotificationChannel()
         startAsForegroundService()
 
+        connectivity = getSystemService(ConnectivityManager::class.java)
+        discovery = ComputerDiscoveryManager(this, { computers ->
+            if (!destroyed && network != null) {
+                val preferred = ConnectionSettings.preferredServiceName(this)
+                val computer = computers.firstOrNull { it.serviceName == preferred }
+                val saved = ConnectionSettings.loadServer(this)
+                if (computer != null && saved != null &&
+                    (computer.host != saved.host || computer.port != saved.port)) {
+                    ConnectionSettings.saveServer(this, computer.host, computer.port,
+                        computer.serviceName, computer.computerName, computer.distribution)
+                    if (!pairingRejected) applyConnectionSettings()
+                }
+            }
+        }, BridgeState::addLog)
+        if (ConnectionSettings.hasLocalNetworkPermission(this)) {
+            connectivity.registerDefaultNetworkCallback(networkCallback)
+        }
+        handler.postDelayed(refreshDiscovery, 60_000L)
         BridgeState.addLog("Bridge service started")
     }
 
@@ -63,6 +124,7 @@ class BridgeService : Service() {
             },
             messageRouter = messageRouter,
             onStatusChanged = { status ->
+                if (status == ConnectionStatus.RECONNECT_REQUIRED) pairingRejected = true
                 BridgeState.connectionStatus.value = status
             },
             onLog = BridgeState::addLog
@@ -80,12 +142,20 @@ class BridgeService : Service() {
         flags: Int,
         startId: Int
     ): Int {
+        if (!ConnectionSettings.hasLocalNetworkPermission(this) || ConnectionSettings.loadServer(this) == null) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         when (intent?.action) {
             ACTION_RECONNECT -> {
+                pairingRejected = false
                 if (connectionManager == null) applyConnectionSettings()
                 else connectionManager?.reconnect()
             }
-            ACTION_APPLY_SETTINGS -> applyConnectionSettings()
+            ACTION_APPLY_SETTINGS -> {
+                pairingRejected = false
+                applyConnectionSettings()
+            }
             else -> if (connectionManager == null) applyConnectionSettings()
         }
 
@@ -93,6 +163,10 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        destroyed = true
+        discovery.stop()
+        runCatching { connectivity.unregisterNetworkCallback(networkCallback) }
+        handler.removeCallbacksAndMessages(null)
         NotificationForwarder.send = null
         connectionManager?.stop()
         BridgeState.connectionStatus.value =
@@ -106,6 +180,8 @@ class BridgeService : Service() {
     private fun applyConnectionSettings() {
         BridgeState.addLog("Applying connection settings")
         connectionManager?.stop()
+        connectionManager = null
+        if (network == null || pairingRejected || !ConnectionSettings.hasLocalNetworkPermission(this)) return
         createConnectionManager()
         connectionManager?.start()
     }
@@ -161,6 +237,7 @@ class BridgeService : Service() {
             "io.github.belzenn.androidlinuxbridge.action.APPLY_SETTINGS"
 
         fun start(context: Context) {
+            if (ConnectionSettings.loadServer(context) == null || !ConnectionSettings.hasLocalNetworkPermission(context)) return
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, BridgeService::class.java)

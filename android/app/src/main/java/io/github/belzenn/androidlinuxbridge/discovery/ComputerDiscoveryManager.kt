@@ -24,56 +24,80 @@ class ComputerDiscoveryManager(
     private val computers = linkedMapOf<String, DiscoveredComputer>()
     private val resolving = mutableSetOf<String>()
     private var discovering = false
+    private var generation = 0
+    private var listener: NsdManager.DiscoveryListener? = null
 
     fun start() {
         if (discovering) return
         discovering = true
-        nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        val current = ++generation
+        val callback = createListener(current)
+        listener = callback
+        try {
+            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, callback)
+        } catch (exception: RuntimeException) {
+            discovering = false
+            notifyLog("Computer search unavailable: ${exception.message}")
+        }
         notifyLog("Searching for computers on the local network")
     }
 
     fun stop() {
-        if (!discovering) return
-        runCatching { nsdManager.stopServiceDiscovery(listener) }
+        generation++
+        listener?.let { callback -> runCatching { nsdManager.stopServiceDiscovery(callback) } }
+        listener = null
         discovering = false
+        computers.clear()
+        resolving.clear()
     }
 
     fun resolve(computer: DiscoveredComputer, onResolved: (String, Int) -> Unit) {
         onResolved(computer.host, computer.port)
     }
 
-    private val listener = object : NsdManager.DiscoveryListener {
+    private fun createListener(current: Int) = object : NsdManager.DiscoveryListener {
         override fun onDiscoveryStarted(regType: String) = Unit
         override fun onDiscoveryStopped(serviceType: String) = Unit
         override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-            discovering = false
-            notifyLog("Computer search failed ($errorCode)")
+            mainHandler.post { if (current == generation) {
+                discovering = false
+                notifyLog("Computer search failed ($errorCode)")
+            } }
         }
         override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-            discovering = false
+            mainHandler.post { if (current == generation) discovering = false }
         }
         override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-            resolveDiscoveredService(serviceInfo)
+            mainHandler.post { if (current == generation) resolveDiscoveredService(serviceInfo, current) }
         }
         override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-            computers.remove(serviceInfo.serviceName)
-            publishComputers()
+            mainHandler.post { if (current == generation) {
+                computers.remove(serviceInfo.serviceName)
+                publishComputers()
+            } }
         }
     }
 
-    private fun resolveDiscoveredService(serviceInfo: NsdServiceInfo) {
+    private fun resolveDiscoveredService(serviceInfo: NsdServiceInfo, current: Int) {
         if (!resolving.add(serviceInfo.serviceName)) return
-        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+        try { nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
             override fun onResolveFailed(resolvingService: NsdServiceInfo, errorCode: Int) {
-                resolving.remove(resolvingService.serviceName)
-                notifyLog("Could not read discovered computer ($errorCode)")
+                mainHandler.post { if (current == generation) {
+                    resolving.remove(resolvingService.serviceName)
+                    notifyLog("Could not read discovered computer ($errorCode)")
+                } }
             }
 
             override fun onServiceResolved(resolvedService: NsdServiceInfo) {
-                resolving.remove(resolvedService.serviceName)
-                addResolvedComputer(resolvedService)
+                mainHandler.post { if (current == generation) {
+                    resolving.remove(resolvedService.serviceName)
+                    addResolvedComputer(resolvedService)
+                } }
             }
-        })
+        }) } catch (exception: RuntimeException) {
+            resolving.remove(serviceInfo.serviceName)
+            notifyLog("Could not resolve computer: ${exception.message}")
+        }
     }
 
     private fun addResolvedComputer(serviceInfo: NsdServiceInfo) {
@@ -94,7 +118,7 @@ class ComputerDiscoveryManager(
         publishComputers()
     }
 
-    private fun publishComputers() = mainHandler.post {
+    private fun publishComputers() {
         onComputersChanged(computers.values.sortedBy { it.computerName })
     }
 
