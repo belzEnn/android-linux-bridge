@@ -5,11 +5,13 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.util.UUID
 
-data class ServerAddress(val host: String, val port: Int)
+data class ServerAddress(val host: String, val port: Int, val computerName: String, val distribution: String)
 
 object ConnectionSettings {
     private const val PREFERENCES_NAME = "bridge_connection"
     private const val HOST_KEY = "server_host"
+    private const val COMPUTER_NAME_KEY = "computer_name"
+    private const val DISTRIBUTION_KEY = "distribution"
     private const val PORT_KEY = "server_port"
     private const val DEVICE_ID_KEY = "device_id"
     private const val SERVICE_NAME_KEY = "service_name"
@@ -23,16 +25,22 @@ object ConnectionSettings {
         }
         val host = preferences.getString(HOST_KEY, null) ?: return null
         val port = preferences.getInt(PORT_KEY, 0)
-        return ServerAddress(host, port).takeIf {
+        return ServerAddress(
+            host, port,
+            preferences.getString(COMPUTER_NAME_KEY, "") ?: "",
+            preferences.getString(DISTRIBUTION_KEY, "") ?: ""
+        ).takeIf {
             it.host.isNotBlank() && it.port in 1..65535
         }
     }
 
-    fun saveServer(context: Context, host: String, port: Int, serviceName: String) {
+    fun saveServer(context: Context, host: String, port: Int, serviceName: String, computerName: String, distribution: String) {
         preferences(context).edit()
             .putString(HOST_KEY, host)
             .putInt(PORT_KEY, port)
             .putString(SERVICE_NAME_KEY, serviceName)
+            .putString(COMPUTER_NAME_KEY, computerName)
+            .putString(DISTRIBUTION_KEY, distribution)
             .apply()
     }
 

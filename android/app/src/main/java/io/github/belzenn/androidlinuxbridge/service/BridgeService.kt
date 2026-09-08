@@ -36,7 +36,7 @@ class BridgeService : Service() {
 
     private fun createConnectionManager() {
         val serverAddress = ConnectionSettings.loadServer(this) ?: return
-        BridgeState.updateServer(serverAddress.host, serverAddress.port)
+        BridgeState.updateServer(serverAddress.host, serverAddress.port, serverAddress.computerName, serverAddress.distribution)
 
         val batteryHandler = BatteryHandler(applicationContext) { level ->
             BridgeState.batteryLevel.intValue = level

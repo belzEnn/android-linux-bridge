@@ -12,11 +12,15 @@ object BridgeState {
     val batteryLevel = mutableIntStateOf(-1)
     val connectionStatus = mutableStateOf(ConnectionStatus.DISCONNECTED)
     val serverHost = mutableStateOf("")
+    val computerName = mutableStateOf("")
+    val distribution = mutableStateOf("")
     val serverPort = mutableIntStateOf(0)
     val logs = mutableStateListOf<String>()
     val computers = mutableStateListOf<DiscoveredComputer>()
 
-    fun updateServer(host: String, port: Int) {
+    fun updateServer(host: String, port: Int, name: String, distro: String) {
+        computerName.value = name
+        distribution.value = distro
         serverHost.value = host
         serverPort.intValue = port
     }
