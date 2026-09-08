@@ -1,4 +1,5 @@
 #!/bin/sh
 
-exec /usr/local/lib/android-linux-bridge/venv/bin/python \
-    /usr/local/lib/android-linux-bridge/daemon/main.py "$@"
+cd /usr/local/lib/android-linux-bridge || exit 1
+
+exec ./venv/bin/python -m daemon.main "$@"

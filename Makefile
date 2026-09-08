@@ -158,6 +158,9 @@ install:
 	@test -f "$(DAEMON_LAUNCHER)" || \
 		(echo "Error: $(DAEMON_LAUNCHER) not found"; exit 1)
 
+	@test -f "requirements.txt" || \
+		(echo "Error: requirements.txt not found"; exit 1)
+
 	@echo "Installing Android Linux Bridge..."
 
 	install -Dm755 "$(DESKTOP_BIN)" \
@@ -170,6 +173,14 @@ install:
 
 	install -Dm644 requirements.txt \
 		"$(DESTDIR)$(LIBDIR)/requirements.txt"
+
+	@echo "Creating Python virtual environment..."
+	rm -rf "$(DESTDIR)$(LIBDIR)/venv"
+	$(PYTHON) -m venv "$(DESTDIR)$(LIBDIR)/venv"
+
+	@echo "Installing daemon dependencies..."
+	"$(DESTDIR)$(LIBDIR)/venv/bin/pip" install \
+		-r "$(DESTDIR)$(LIBDIR)/requirements.txt"
 
 	install -Dm755 "$(DAEMON_LAUNCHER)" \
 		"$(DESTDIR)$(BINDIR)/android-linux-bridge-daemon"
@@ -184,6 +195,7 @@ install:
 		"$(DESTDIR)$(ICONS_DIR)/$(APP_ID).svg"
 
 	@if [ -d "$(DESKTOP_DIR)/data" ]; then \
+		install -d "$(DESTDIR)$(SCHEMAS_DIR)"; \
 		find "$(DESKTOP_DIR)/data" \
 			-name '*.gschema.xml' \
 			-exec install -Dm644 {} "$(DESTDIR)$(SCHEMAS_DIR)/" \; ; \
@@ -191,8 +203,7 @@ install:
 
 	@if command -v glib-compile-schemas >/dev/null 2>&1; then \
 		glib-compile-schemas \
-			"$(DESTDIR)$(SCHEMAS_DIR)" \
-			2>/dev/null || true; \
+			"$(DESTDIR)$(SCHEMAS_DIR)"; \
 	fi
 
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
