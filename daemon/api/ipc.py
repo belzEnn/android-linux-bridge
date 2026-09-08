@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..protocol import (
+    MAX_MESSAGE_BYTES,
     ProtocolError,
     decode_message,
     encode_message,
@@ -16,6 +17,7 @@ from ..protocol import (
     make_response,
 )
 from ..transport.android_server import SessionRegistry
+from ..transport.android_session import RemoteError
 from ..domain.pairing import PairingManager
 
 
@@ -55,6 +57,8 @@ class IpcServer:
             Callable[[Mapping[str, Any]], Awaitable[Any]],
         ] = {
             "battery.get": self._battery_get,
+            "notifications.settings.get": self._notifications_get,
+            "notifications.settings.set": self._notifications_set,
             "devices.list": self._devices_list,
             "daemon.status": self._daemon_status,
             "pairing.pending": self._pairing_pending,
@@ -173,12 +177,42 @@ class IpcServer:
 
         try:
             result = await handler(params)
-        except IpcRequestError as exception:
+        except (IpcRequestError, RemoteError) as exception:
             return make_error(request_id, exception.code, str(exception))
         except (ConnectionError, TimeoutError, RuntimeError) as exception:
             return make_error(request_id, "REQUEST_FAILED", str(exception))
 
         return make_response(request_id, result)
+
+    async def _notifications_get(self, params: Mapping[str, Any]) -> Any:
+        return await self._notifications_request("notifications.settings.get", params)
+
+    async def _notifications_set(self, params: Mapping[str, Any]) -> Any:
+        if (
+            not isinstance(params.get("package"), str)
+            or not params["package"].strip()
+            or not isinstance(params.get("enabled"), bool)
+        ):
+            raise IpcRequestError("INVALID_REQUEST", "Expected package and enabled")
+        return await self._notifications_request("notifications.settings.set", params)
+
+    async def _notifications_request(
+        self, method: str, params: Mapping[str, Any],
+    ) -> Any:
+        device_id = params.get("device_id")
+        if not isinstance(device_id, str) or not device_id:
+            raise IpcRequestError("INVALID_REQUEST", "Expected device_id")
+        session = next(
+            (s for s in reversed(self.registry.sessions) if s.device_id == device_id),
+            None,
+        )
+        if session is None:
+            raise IpcRequestError("NO_DEVICE", "Android device is disconnected")
+        return await session.request(
+            method,
+            {k: v for k, v in params.items() if k != "device_id"},
+            timeout=4.0,
+        )
 
     async def _battery_get(self, params: Mapping[str, Any]) -> Any:
         del params
@@ -274,7 +308,7 @@ class IpcClient:
 
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_unix_connection(
-            self.socket_path
+            self.socket_path, limit=MAX_MESSAGE_BYTES
         )
 
     async def close(self) -> None:

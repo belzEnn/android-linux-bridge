@@ -10,6 +10,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -51,6 +52,28 @@ class ConnectionManager(
     private var socket: Socket? = null
 
     private var writer: BufferedWriter? = null
+    @Volatile private var authenticated = false
+    private val events = Channel<Pair<Socket, JSONObject>>(100)
+
+    init {
+        scope.launch {
+            for ((connection, event) in events) {
+                try {
+                    synchronized(writerLock) {
+                        if (authenticated && socket === connection) sendMessage(event)
+                    }
+                } catch (_: IOException) {
+                    // Wake the receive loop and let its normal reconnect path recover.
+                    try { connection.close() } catch (_: IOException) { }
+                }
+            }
+        }
+    }
+
+    fun sendEvent(event: JSONObject) {
+        val connection = socket ?: return
+        if (authenticated) events.trySend(connection to event)
+    }
 
     fun start() {
         if (running) return
@@ -74,6 +97,7 @@ class ConnectionManager(
     fun stop() {
         running = false
         closeConnection()
+        events.cancel()
         scope.cancel()
     }
 
@@ -100,18 +124,20 @@ class ConnectionManager(
                 socket = connectedSocket
                 writer = BufferedWriter(
                     OutputStreamWriter(
-                        connectedSocket.getOutputStream()
+                        connectedSocket.getOutputStream(), Charsets.UTF_8
                     )
                 )
                 notifyStatus(ConnectionStatus.AWAITING_APPROVAL)
                 notifyLog("Waiting for computer approval")
-                performPairing(connectedSocket)
+                val reader = BufferedReader(InputStreamReader(connectedSocket.getInputStream(), Charsets.UTF_8))
+                performPairing(reader)
+                authenticated = true
                 failedAttempts = 0
 
                 notifyStatus(ConnectionStatus.CONNECTED)
                 notifyLog("Connected to Linux daemon")
 
-                listenForMessages(connectedSocket)
+                listenForMessages(reader)
             } catch (exception: Exception) {
                 if (running) {
                     notifyLog(
@@ -146,13 +172,7 @@ class ConnectionManager(
         }
     }
 
-    private fun listenForMessages(connectedSocket: Socket) {
-        val reader = BufferedReader(
-            InputStreamReader(
-                connectedSocket.getInputStream()
-            )
-        )
-
+    private fun listenForMessages(reader: BufferedReader) {
         while (running) {
             val line = reader.readLine() ?: break
             notifyLog("Request received")
@@ -173,7 +193,7 @@ class ConnectionManager(
         }
     }
 
-    private fun performPairing(connectedSocket: Socket) {
+    private fun performPairing(reader: BufferedReader) {
         val pairingRequest = JSONObject()
             .put("kind", "request")
             .put("id", "pairing")
@@ -191,9 +211,7 @@ class ConnectionManager(
             )
         sendMessage(pairingRequest)
 
-        val response = BufferedReader(
-            InputStreamReader(connectedSocket.getInputStream())
-        ).readLine() ?: throw IOException("Computer closed pairing request")
+        val response = reader.readLine() ?: throw IOException("Computer closed pairing request")
         val message = JSONObject(response)
         val error = message.optJSONObject("error")
         if (error != null) {
@@ -227,6 +245,9 @@ class ConnectionManager(
     }
 
     private fun closeConnection() {
+        authenticated = false
+        // Closing the socket first interrupts any blocked writer before taking its lock.
+        try { socket?.close() } catch (_: IOException) { }
         synchronized(writerLock) {
             try {
                 writer?.close()

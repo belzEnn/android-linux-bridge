@@ -1,5 +1,9 @@
 package io.github.belzenn.androidlinuxbridge
 
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.runtime.mutableStateOf
+import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationSettings
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -41,6 +45,13 @@ import io.github.belzenn.androidlinuxbridge.service.BridgeService
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class MainActivity : ComponentActivity() {
+    private val notificationAccess = mutableStateOf(false)
+
+    override fun onResume() {
+        super.onResume()
+        notificationAccess.value = NotificationSettings.accessGranted(this)
+    }
+
     private lateinit var discovery: ComputerDiscoveryManager
     private var preferredServiceAttempted = false
     private val permissionLauncher = registerForActivityResult(
@@ -70,19 +81,25 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                BridgeScreen(
-                    status = BridgeState.connectionStatus.value,
-                    serverAddress = "${BridgeState.serverHost.value}:${BridgeState.serverPort.intValue}",
-                    batteryLevel = BridgeState.batteryLevel.intValue,
-                    computers = BridgeState.computers,
-                    logs = BridgeState.logs,
-                    onComputerSelected = ::selectComputer,
-                    onClearLogs = BridgeState::clearLogs,
-                    onReconnect = {
-                        if (hasLocalNetworkPermission()) BridgeService.reconnect(this)
-                        else requestRequiredPermissions()
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(if (notificationAccess.value) "Notification access enabled" else "Notification access disabled")
+                    Button(onClick = { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }) {
+                        Text("Notification access settings")
                     }
-                )
+                    BridgeScreen(
+                        status = BridgeState.connectionStatus.value,
+                        serverAddress = "${BridgeState.serverHost.value}:${BridgeState.serverPort.intValue}",
+                        batteryLevel = BridgeState.batteryLevel.intValue,
+                        computers = BridgeState.computers,
+                        logs = BridgeState.logs,
+                        onComputerSelected = ::selectComputer,
+                        onClearLogs = BridgeState::clearLogs,
+                        onReconnect = {
+                            if (hasLocalNetworkPermission()) BridgeService.reconnect(this@MainActivity)
+                            else requestRequiredPermissions()
+                        }
+                    )
+                }
             }
         }
         BridgeState.addLog("Application opened")

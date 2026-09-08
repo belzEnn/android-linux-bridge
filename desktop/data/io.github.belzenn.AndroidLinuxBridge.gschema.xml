@@ -9,5 +9,9 @@
         <choice value="dark"/>
       </choices>
     </key>
+    <key name="sidebar-collapsed" type="b">
+      <default>false</default>
+      <summary>Whether the navigation sidebar is collapsed</summary>
+    </key>
   </schema>
 </schemalist>

@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..protocol import ProtocolError, decode_message, encode_message, make_request
@@ -25,7 +25,9 @@ class AndroidSession:
         writer: asyncio.StreamWriter,
         device_id: str,
         model: str,
+        on_event: Callable[["AndroidSession", str, dict[str, Any]], None] | None = None,
     ) -> None:
+        self.on_event = on_event
         self.reader = reader
         self.writer = writer
         self.device_id = device_id
@@ -161,7 +163,9 @@ class AndroidSession:
 
         if kind == "event":
             event = message.get("event", "unknown")
-            print(f"Event from {self.address}: {event}")
+            data = message.get("data")
+            if isinstance(event, str) and isinstance(data, dict) and self.on_event:
+                self.on_event(self, event, data)
             return
 
         print(f"Unexpected request from {self.address}")

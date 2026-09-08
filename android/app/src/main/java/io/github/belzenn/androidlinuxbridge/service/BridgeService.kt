@@ -1,5 +1,7 @@
 package io.github.belzenn.androidlinuxbridge.service
 
+import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationForwarder
+import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationSettings
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -44,7 +46,9 @@ class BridgeService : Service() {
         val messageRouter = MessageRouter(
             handlers = mapOf(
                 "battery.get" to batteryHandler::handle,
-                "system.ping" to pingHandler::handle
+                "system.ping" to pingHandler::handle,
+                "notifications.settings.get" to { NotificationSettings.get(applicationContext) },
+                "notifications.settings.set" to { NotificationSettings.set(applicationContext, it) }
             )
         )
 
@@ -64,6 +68,8 @@ class BridgeService : Service() {
             onLog = BridgeState::addLog
         )
 
+        NotificationForwarder.send = { event -> connectionManager?.sendEvent(event) }
+
         BridgeState.addLog(
             "Server address: ${serverAddress.host}:${serverAddress.port}"
         )
@@ -75,15 +81,19 @@ class BridgeService : Service() {
         startId: Int
     ): Int {
         when (intent?.action) {
-            ACTION_RECONNECT -> connectionManager?.reconnect()
+            ACTION_RECONNECT -> {
+                if (connectionManager == null) applyConnectionSettings()
+                else connectionManager?.reconnect()
+            }
             ACTION_APPLY_SETTINGS -> applyConnectionSettings()
-            else -> Unit
+            else -> if (connectionManager == null) applyConnectionSettings()
         }
 
         return START_STICKY
     }
 
     override fun onDestroy() {
+        NotificationForwarder.send = null
         connectionManager?.stop()
         BridgeState.connectionStatus.value =
             io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus.DISCONNECTED

@@ -12,13 +12,23 @@ use tokio::runtime::Builder;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use crate::model::{Battery, Device, PairingRequest, TrustedDevice};
+use crate::model::{Battery, Device, NotificationSettings, PairingRequest, TrustedDevice};
 
 #[derive(Debug)]
 pub enum Command {
-    RespondPairing { id: String, accepted: bool },
-    RevokeTrusted { device_id: String },
+    RespondPairing {
+        id: String,
+        accepted: bool,
+    },
+    RevokeTrusted {
+        device_id: String,
+    },
     ResetTrusted,
+    Notifications {
+        device_id: String,
+        change: Option<(String, bool)>,
+        reply: Sender<Result<NotificationSettings, String>>,
+    },
     Stop,
 }
 
@@ -59,6 +69,10 @@ async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
     loop {
         if client.is_none() {
             while let Ok(command) = command_rx.try_recv() {
+                if let Command::Notifications { reply, .. } = &command {
+                    let _ = reply.send(Err("Daemon is offline".to_string()));
+                    continue;
+                }
                 if matches!(command, Command::Stop) {
                     return;
                 }
@@ -102,6 +116,28 @@ async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
                     active_client
                         .request::<Value>("pairing.reset", json!({}))
                         .await
+                }
+                Command::Notifications {
+                    device_id,
+                    change,
+                    reply,
+                } => {
+                    let result = async {
+                        if let Some((package, enabled)) = change {
+                            active_client.request::<Value>("notifications.settings.set",
+                                json!({"device_id": device_id, "package": package, "enabled": enabled})).await?;
+                        }
+                        active_client.request::<NotificationSettings>("notifications.settings.get",
+                            json!({"device_id": device_id})).await
+                    }.await;
+                    let failed = result.is_err();
+                    let _ = reply.send(result);
+                    if failed && !active_client.reusable {
+                        // Only transport/protocol failures require a new stream.
+                        disconnected = true;
+                        break;
+                    }
+                    continue;
                 }
                 Command::Stop => return,
             };
@@ -176,6 +212,7 @@ async fn refresh(client: &mut Client, event_tx: &Sender<Event>) -> bool {
 struct Client {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
+    reusable: bool,
 }
 
 impl Client {
@@ -184,6 +221,7 @@ impl Client {
         Self {
             reader: BufReader::new(reader),
             writer,
+            reusable: true,
         }
     }
 
@@ -192,6 +230,7 @@ impl Client {
         method: &str,
         params: Value,
     ) -> Result<T, String> {
+        self.reusable = false;
         timeout(Duration::from_secs(5), self.exchange(method, params))
             .await
             .map_err(|_| "Daemon request timed out".to_string())?
@@ -235,6 +274,7 @@ impl Client {
         {
             return Err("Daemon returned an invalid response".to_string());
         }
+        self.reusable = true;
         if let Some(error) = response.get("error") {
             return Err(error
                 .get("message")

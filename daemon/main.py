@@ -2,6 +2,7 @@ import asyncio
 import signal
 import sys
 
+from .features.notifications import NotificationDispatcher
 from .api.ipc import IpcServer, IpcStartupError
 from .transport.android_server import DaemonServer
 from .transport.discovery import MdnsAdvertisement
@@ -9,6 +10,8 @@ from .transport.discovery import MdnsAdvertisement
 
 async def main() -> None:
     server = DaemonServer()
+    notifications = NotificationDispatcher()
+    server.on_event = notifications.dispatch
     advertisement = MdnsAdvertisement(server.port)
     ipc_server = IpcServer(server.registry, server.pairing)
     stop_event = asyncio.Event()
@@ -18,6 +21,7 @@ async def main() -> None:
         loop.add_signal_handler(signal_name, stop_event.set)
 
     await server.start()
+    notifications.start()
     try:
         await advertisement.start()
         await ipc_server.start()
@@ -29,6 +33,7 @@ async def main() -> None:
     finally:
         await advertisement.close()
         await server.close()
+        await notifications.close()
 
 
 def run() -> None:

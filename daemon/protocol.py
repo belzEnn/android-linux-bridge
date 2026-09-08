@@ -3,6 +3,10 @@ from collections.abc import Mapping
 from typing import Any
 
 
+# Catalog responses can exceed the default asyncio 64 KiB line limit.
+MAX_MESSAGE_BYTES = 1024 * 1024
+
+
 class ProtocolError(ValueError):
     ...
     # Raised when a peer sends a malformed protocol message

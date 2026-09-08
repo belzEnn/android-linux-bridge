@@ -34,3 +34,17 @@ pub struct TrustedDevice {
 fn default_model() -> String {
     "Android device".to_string()
 }
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct NotificationApp {
+    pub package: String,
+    pub label: String,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct NotificationSettings {
+    pub access_granted: bool,
+    pub listener_connected: bool,
+    pub apps: Vec<NotificationApp>,
+}

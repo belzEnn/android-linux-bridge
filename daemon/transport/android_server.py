@@ -2,7 +2,7 @@ import asyncio
 
 from .android_session import AndroidSession
 from ..domain.pairing import PairingManager
-from ..protocol import ProtocolError, decode_message, encode_message, make_error, make_response
+from ..protocol import MAX_MESSAGE_BYTES, ProtocolError, decode_message, encode_message, make_error, make_response
 
 
 class SessionRegistry:
@@ -31,6 +31,7 @@ class DaemonServer:
         self.host = host
         self.port = port
         self.registry = SessionRegistry()
+        self.on_event = None
         self.pairing = PairingManager()
         self._server: asyncio.Server | None = None
 
@@ -39,6 +40,7 @@ class DaemonServer:
             self._handle_client,
             host=self.host,
             port=self.port,
+            limit=MAX_MESSAGE_BYTES,
         )
         print(f"Daemon listening on {self.host}:{self.port}")
 
@@ -64,7 +66,7 @@ class DaemonServer:
             return
 
         device_id, model = identity
-        session = AndroidSession(reader, writer, device_id, model)
+        session = AndroidSession(reader, writer, device_id, model, self.on_event)
         self.registry.add(session)
         print(f"Android connected: {session.address}")
 
