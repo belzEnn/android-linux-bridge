@@ -1,0 +1,12 @@
+[Unit]
+Description=Android Linux Bridge daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/android-linux-bridge-daemon
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

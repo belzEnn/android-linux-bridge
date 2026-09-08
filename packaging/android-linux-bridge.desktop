@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Android Linux Bridge
+Comment=Connect your Android phone to Linux
+Exec=android-linux-bridge-desktop
+Icon=io.github.belzenn.AndroidLinuxBridge
+Terminal=false
+Categories=Utility;
+StartupNotify=true
+StartupWMClass=io.github.belzenn.AndroidLinuxBridge

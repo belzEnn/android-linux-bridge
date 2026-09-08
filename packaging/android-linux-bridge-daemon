@@ -1,0 +1,4 @@
+#!/bin/sh
+
+exec /usr/local/lib/android-linux-bridge/venv/bin/python \
+    /usr/local/lib/android-linux-bridge/daemon/main.py "$@"
