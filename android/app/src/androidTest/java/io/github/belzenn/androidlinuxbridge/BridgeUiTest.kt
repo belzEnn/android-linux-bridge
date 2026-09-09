@@ -22,7 +22,7 @@ class BridgeUiTest {
 
     private fun show(setup: androidx.compose.runtime.State<SetupStatus>) {
         compose.setContent {
-            BridgeApp(setup.value, {}, {}, {}, {}, {}, {}, {})
+            BridgeApp(setup.value, {}, {}, {}, {}, {}, {}, {}, {})
         }
     }
 

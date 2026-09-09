@@ -2,6 +2,8 @@ package io.github.belzenn.androidlinuxbridge.service
 
 import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationForwarder
 import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationSettings
+import io.github.belzenn.androidlinuxbridge.features.clipboard.ClipboardForwarder
+import io.github.belzenn.androidlinuxbridge.features.clipboard.ClipboardHistory
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -110,7 +112,8 @@ class BridgeService : Service() {
                 "battery.get" to batteryHandler::handle,
                 "system.ping" to pingHandler::handle,
                 "notifications.settings.get" to { NotificationSettings.get(applicationContext) },
-                "notifications.settings.set" to { NotificationSettings.set(applicationContext, it) }
+                "notifications.settings.set" to { NotificationSettings.set(applicationContext, it) },
+                "clipboard.history.replace" to { ClipboardHistory.replace(applicationContext, it) }
             )
         )
 
@@ -142,6 +145,7 @@ class BridgeService : Service() {
         )
 
         NotificationForwarder.send = { event -> connectionManager?.sendEvent(event) }
+        ClipboardForwarder.send = { event -> connectionManager?.sendEvent(event) == true }
 
         BridgeState.addLog(
             "Server address: ${serverAddress.host}:${serverAddress.port}"
@@ -188,6 +192,7 @@ class BridgeService : Service() {
         runCatching { connectivity.unregisterNetworkCallback(networkCallback) }
         handler.removeCallbacksAndMessages(null)
         NotificationForwarder.send = null
+        ClipboardForwarder.send = null
         connectionManager?.stop()
         BridgeState.connectionStatus.value =
             io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus.DISCONNECTED

@@ -80,9 +80,9 @@ class ConnectionManager(
         }
     }
 
-    fun sendEvent(event: JSONObject) {
-        val connection = socket ?: return
-        if (authenticated) events.trySend(connection to event)
+    fun sendEvent(event: JSONObject): Boolean {
+        val connection = socket ?: return false
+        return authenticated && events.trySend(connection to event).isSuccess
     }
 
     fun start() {

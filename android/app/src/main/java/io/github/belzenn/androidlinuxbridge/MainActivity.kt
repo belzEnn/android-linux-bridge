@@ -1,6 +1,8 @@
 package io.github.belzenn.androidlinuxbridge
 
 import android.Manifest
+import android.app.StatusBarManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -17,6 +19,7 @@ import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
 import io.github.belzenn.androidlinuxbridge.discovery.ComputerDiscoveryManager
 import io.github.belzenn.androidlinuxbridge.discovery.DiscoveredComputer
 import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationSettings
+import io.github.belzenn.androidlinuxbridge.features.clipboard.ClipboardTileService
 import io.github.belzenn.androidlinuxbridge.service.BridgeService
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 import io.github.belzenn.androidlinuxbridge.ui.BridgeApp
@@ -70,7 +73,8 @@ class MainActivity : ComponentActivity() {
                 onReconnect = {
                     if (hasLocalNetworkPermission()) BridgeService.reconnect(this)
                     else requestRequiredPermissions()
-                }
+                },
+                onAddClipboardTile = ::addClipboardTile
             )
         }
         BridgeState.addLog("Application opened")
@@ -126,4 +130,17 @@ class MainActivity : ComponentActivity() {
 
     private fun hasLocalNetworkPermission(): Boolean =
         ConnectionSettings.hasLocalNetworkPermission(this)
+
+    private fun addClipboardTile() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getSystemService(StatusBarManager::class.java).requestAddTileService(
+                ComponentName(this, ClipboardTileService::class.java),
+                getString(R.string.clipboard_tile_label),
+                android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher),
+                mainExecutor,
+            ) { }
+        } else {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
+        }
+    }
 }

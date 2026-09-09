@@ -58,7 +58,8 @@ fun BridgeApp(
     onNotificationSettings: () -> Unit,
     onBatterySettings: () -> Unit,
     onComputerSelected: (DiscoveredComputer) -> Unit,
-    onReconnect: () -> Unit
+    onReconnect: () -> Unit,
+    onAddClipboardTile: () -> Unit
 ) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("bridge_appearance", Context.MODE_PRIVATE) }
@@ -97,7 +98,7 @@ fun BridgeApp(
                     }, onTheme = {
                         theme = it
                         preferences.edit().putString("theme", it).apply()
-                    }, onSetup = { showSetup = true })
+                    }, onSetup = { showSetup = true }, onAddClipboardTile = onAddClipboardTile)
                 }
                 val content: @Composable () -> Unit = {
                     Scaffold(
@@ -152,7 +153,7 @@ fun BridgeApp(
 }
 
 @Composable
-private fun Sidebar(page: Page, theme: String, setupComplete: Boolean, onPage: (Page) -> Unit, onTheme: (String) -> Unit, onSetup: () -> Unit) {
+private fun Sidebar(page: Page, theme: String, setupComplete: Boolean, onPage: (Page) -> Unit, onTheme: (String) -> Unit, onSetup: () -> Unit, onAddClipboardTile: () -> Unit) {
     Column(Modifier.fillMaxHeight().padding(12.dp)) {
         Text("Android Linux Bridge", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(16.dp, 20.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
@@ -167,6 +168,9 @@ private fun Sidebar(page: Page, theme: String, setupComplete: Boolean, onPage: (
         }
         TextButton(onClick = onSetup, enabled = !setupComplete, modifier = Modifier.fillMaxWidth()) {
             Text(if (setupComplete) "All permissions enabled" else "Permissions & background")
+        }
+        TextButton(onClick = onAddClipboardTile, modifier = Modifier.fillMaxWidth()) {
+            Text("Add clipboard tile")
         }
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
         Row(Modifier.align(Alignment.CenterHorizontally), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

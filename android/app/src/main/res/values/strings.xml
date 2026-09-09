@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Android Linux Bridge</string>
+    <string name="clipboard_tile_label">Clipboard history</string>
 </resources>
