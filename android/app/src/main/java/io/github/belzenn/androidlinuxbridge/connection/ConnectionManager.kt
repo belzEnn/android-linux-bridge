@@ -70,7 +70,16 @@ class ConnectionManager(
             for ((connection, event) in events) {
                 try {
                     synchronized(writerLock) {
-                        if (authenticated && socket === connection) sendMessage(event)
+                        if (authenticated && socket === connection) {
+                            sendMessage(event)
+                            val name = event.optString("event", "unknown")
+                            val details = if (name == "battery.changed") {
+                                event.optJSONObject("data")?.let {
+                                    " (level=${it.optInt("level")}%, charging=${it.optBoolean("charging")})"
+                                } ?: ""
+                            } else ""
+                            notifyLog("Event sent: $name$details")
+                        }
                     }
                 } catch (_: IOException) {
                     // Wake the receive loop and let its normal reconnect path recover.
@@ -190,13 +199,18 @@ class ConnectionManager(
     private fun listenForMessages(reader: BufferedReader) {
         while (running) {
             val line = reader.readLine() ?: break
-            notifyLog("Request received")
-
             try {
-                val response = messageRouter.handle(JSONObject(line))
+                val message = JSONObject(line)
+                val method = message.optString("method", "unknown")
+                if (message.optString("kind") == "request") {
+                    notifyLog("Request received: $method")
+                }
+                val response = messageRouter.handle(message)
                 if (response != null) {
                     sendMessage(response)
-                    notifyLog("Response sent")
+                    val error = response.optJSONObject("error")
+                    notifyLog(if (error == null) "Response sent: $method"
+                        else "Error response sent: $method (${error.optString("code")})")
                 }
             } catch (_: JSONException) {
                 notifyLog("Invalid JSON received")

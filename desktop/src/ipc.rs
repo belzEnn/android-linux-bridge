@@ -2,7 +2,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -64,7 +64,7 @@ pub fn spawn(command_rx: Receiver<Command>, event_tx: Sender<Event>) -> thread::
 async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
     let path = socket_path();
     let mut client: Option<Client> = None;
-    let mut last_full_refresh = Instant::now() - Duration::from_secs(5);
+    let mut subscription: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
         if client.is_none() {
@@ -82,7 +82,13 @@ async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
                 Ok(stream) => {
                     client = Some(Client::new(stream));
                     let _ = event_tx.send(Event::Online);
-                    last_full_refresh = Instant::now() - Duration::from_secs(5);
+                    let path = path.clone();
+                    let tx = event_tx.clone();
+                    subscription = Some(tokio::spawn(async move {
+                        if let Err(error) = watch_state(path, tx.clone()).await {
+                            let _ = tx.send(Event::Error(error));
+                        }
+                    }));
                 }
                 Err(_) => {
                     let _ = event_tx.send(Event::Offline);
@@ -139,73 +145,75 @@ async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
                     }
                     continue;
                 }
-                Command::Stop => return,
+                Command::Stop => {
+                    if let Some(task) = subscription.take() {
+                        task.abort();
+                    }
+                    return;
+                }
             };
             if let Err(error) = result {
                 let _ = event_tx.send(Event::Error(error));
                 disconnected = true;
                 break;
             }
-            last_full_refresh = Instant::now() - Duration::from_secs(5);
         }
 
-        if !disconnected {
-            match active_client
-                .request::<Vec<PairingRequest>>("pairing.pending", json!({}))
-                .await
-            {
-                Ok(requests) => {
-                    let _ = event_tx.send(Event::Pairings(requests));
-                }
-                Err(_) => disconnected = true,
-            }
-        }
-
-        if !disconnected && last_full_refresh.elapsed() >= Duration::from_secs(5) {
-            disconnected = !refresh(active_client, &event_tx).await;
-            last_full_refresh = Instant::now();
+        if subscription.as_ref().is_some_and(|task| task.is_finished()) {
+            disconnected = true;
         }
 
         if disconnected {
+            if let Some(task) = subscription.take() {
+                task.abort();
+            }
             client = None;
             let _ = event_tx.send(Event::Offline);
         }
 
-        sleep(Duration::from_secs(1)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 }
 
-async fn refresh(client: &mut Client, event_tx: &Sender<Event>) -> bool {
-    let devices = match client
-        .request::<Vec<Device>>("devices.list", json!({}))
-        .await
-    {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    let has_active = devices.iter().any(|device| device.active);
-    let _ = event_tx.send(Event::Devices(devices));
+#[derive(serde::Deserialize)]
+struct StateSnapshot {
+    devices: Vec<Device>,
+    battery: Option<Battery>,
+    pairings: Vec<PairingRequest>,
+    trusted: Vec<TrustedDevice>,
+}
 
-    if has_active {
-        match client.request::<Battery>("battery.get", json!({})).await {
-            Ok(battery) => {
-                let _ = event_tx.send(Event::Battery(Some(battery)));
-            }
-            Err(_) => return false,
-        }
-    } else {
-        let _ = event_tx.send(Event::Battery(None));
-    }
+fn emit_state(value: Value, tx: &Sender<Event>) -> Result<(), String> {
+    let state: StateSnapshot = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let _ = tx.send(Event::Devices(state.devices));
+    let _ = tx.send(Event::Battery(state.battery));
+    let _ = tx.send(Event::Pairings(state.pairings));
+    let _ = tx.send(Event::Trusted(state.trusted));
+    Ok(())
+}
 
-    match client
-        .request::<Vec<TrustedDevice>>("pairing.trusted", json!({}))
-        .await
-    {
-        Ok(devices) => {
-            let _ = event_tx.send(Event::Trusted(devices));
-            true
+// A dedicated stream keeps pushed events independent of command responses.
+async fn watch_state(path: PathBuf, tx: Sender<Event>) -> Result<(), String> {
+    let stream = UnixStream::connect(path).await.map_err(|e| e.to_string())?;
+    let mut client = Client::new(stream);
+    let initial: Value = client.request("state.subscribe", json!({})).await?;
+    emit_state(initial, &tx)?;
+    loop {
+        let mut line = String::new();
+        if client
+            .reader
+            .read_line(&mut line)
+            .await
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            return Err("Daemon closed the state subscription".into());
         }
-        Err(_) => false,
+        let event: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+        if event["kind"] != "event" || event["event"] != "state.changed" {
+            return Err("Invalid state event".into());
+        }
+        emit_state(event["data"].clone(), &tx)?;
     }
 }
 
@@ -290,6 +298,16 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn state_snapshot_emits_all_sections_including_missing_battery() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        emit_state(json!({"devices": [], "battery": null, "pairings": [], "trusted": []}), &tx).unwrap();
+        assert!(matches!(rx.recv().unwrap(), Event::Devices(devices) if devices.is_empty()));
+        assert!(matches!(rx.recv().unwrap(), Event::Battery(None)));
+        assert!(matches!(rx.recv().unwrap(), Event::Pairings(items) if items.is_empty()));
+        assert!(matches!(rx.recv().unwrap(), Event::Trusted(items) if items.is_empty()));
+    }
 
     #[test]
     fn device_response_deserializes() {

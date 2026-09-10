@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import uuid
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -36,6 +37,7 @@ class AndroidSession:
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
+        self._last_received = time.monotonic()
 
     @property
     def connected(self) -> bool:
@@ -101,6 +103,8 @@ class AndroidSession:
                 else HEARTBEAT_RETRY_DELAY_SECONDS
             )
             await asyncio.sleep(delay)
+            if failures == 0 and time.monotonic() - self._last_received < HEARTBEAT_INTERVAL_SECONDS:
+                continue
 
             try:
                 result = await self.request(
@@ -151,6 +155,7 @@ class AndroidSession:
                     continue
 
                 self._handle_message(message)
+                self._last_received = time.monotonic()
         finally:
             await self.close()
 

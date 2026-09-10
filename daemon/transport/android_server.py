@@ -10,6 +10,7 @@ from ..protocol import MAX_MESSAGE_BYTES, ProtocolError, decode_message, encode_
 class SessionRegistry:
     def __init__(self) -> None:
         self._sessions: list[AndroidSession] = []
+        self.on_changed = lambda: None
 
     @property
     def sessions(self) -> tuple[AndroidSession, ...]:
@@ -22,10 +23,12 @@ class SessionRegistry:
 
     def add(self, session: AndroidSession) -> None:
         self._sessions.append(session)
+        self.on_changed()
 
     def remove(self, session: AndroidSession) -> None:
         if session in self._sessions:
             self._sessions.remove(session)
+            self.on_changed()
 
 
 class DaemonServer:

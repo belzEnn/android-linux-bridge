@@ -53,6 +53,9 @@ class IpcServer:
         self.socket_path = socket_path or get_ipc_socket_path()
         self._server: asyncio.Server | None = None
         self._clients: dict[asyncio.Task, asyncio.StreamWriter] = {}
+        self._subscribers: set[asyncio.Queue] = set()
+        self.registry.on_changed = self.state_changed
+        self.pairing.on_changed = self.state_changed
         self._handlers: dict[
             str,
             Callable[[Mapping[str, Any]], Awaitable[Any]],
@@ -134,6 +137,14 @@ class IpcServer:
         self._clients[task] = writer
         try:
             while data := await reader.readline():
+                try:
+                    message = decode_message(data)
+                except ProtocolError:
+                    message = {}
+                if (message.get("kind") == "request" and message.get("method") == "state.subscribe"
+                        and isinstance(message.get("id"), str) and message["id"]):
+                    await self._subscribe(reader, writer, message["id"])
+                    return
                 response = await self._dispatch(data)
                 writer.write(encode_message(response))
                 await writer.drain()
@@ -144,6 +155,54 @@ class IpcServer:
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
+
+    def state_changed(self) -> None:
+        for queue in self._subscribers:
+            if not queue.full():
+                queue.put_nowait(None)
+
+    def battery_event(self, session, event, data) -> None:
+        if event != "battery.changed":
+            return
+        level, charging = data.get("level"), data.get("charging")
+        if type(level) is not int or not 0 <= level <= 100 or type(charging) is not bool:
+            return
+        value = {"level": level, "charging": charging}
+        if getattr(session, "battery", None) != value:
+            session.battery = value
+            self.state_changed()
+
+    async def _snapshot(self):
+        active = self.registry.active
+        return {
+            "devices": await self._devices_list({}),
+            "battery": getattr(active, "battery", None),
+            "pairings": await self._pairing_pending({}),
+            "trusted": await self._pairing_trusted({}),
+        }
+
+    async def _subscribe(self, reader, writer, request_id):
+        queue = asyncio.Queue(maxsize=1)
+        self._subscribers.add(queue)
+        disconnected = asyncio.create_task(reader.read(1))
+        update = None
+        try:
+            writer.write(encode_message(make_response(request_id, await self._snapshot())))
+            await writer.drain()
+            while True:
+                update = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait({update, disconnected}, return_when=asyncio.FIRST_COMPLETED)
+                if disconnected in done:
+                    return
+                writer.write(encode_message({"kind": "event", "event": "state.changed",
+                                             "data": await self._snapshot()}))
+                await writer.drain()
+        finally:
+            self._subscribers.discard(queue)
+            tasks = [disconnected] + ([update] if update is not None else [])
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _dispatch(self, data: bytes) -> dict[str, Any]:
         try:
@@ -234,7 +293,7 @@ class IpcServer:
                 "No Android device connected",
             )
 
-        return await session.request("battery.get")
+        return getattr(session, "battery", None)
 
     async def _devices_list(
         self,
@@ -292,6 +351,7 @@ class IpcServer:
         del params
         self.pairing.cancel_pending()
         self.pairing.trusted_devices.reset()
+        self.state_changed()
         for session in self.registry.sessions:
             await session.close()
         return {"ok": True}
@@ -312,6 +372,7 @@ class IpcServer:
         self.pairing.cancel_pending(device_id)
         if not self.pairing.trusted_devices.revoke(device_id):
             raise IpcRequestError("NOT_FOUND", "Trusted device was not found")
+        self.state_changed()
         for session in self.registry.sessions:
             if session.device_id == device_id:
                 await session.close()

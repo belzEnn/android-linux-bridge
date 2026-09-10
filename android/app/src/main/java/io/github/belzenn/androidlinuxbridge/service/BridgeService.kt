@@ -31,6 +31,25 @@ import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class BridgeService : Service() {
+    private var lastBattery: String? = null
+    private val batteryReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            publishBattery()
+        }
+    }
+
+    private fun publishBattery(force: Boolean = false) {
+        if (BridgeState.connectionStatus.value != ConnectionStatus.CONNECTED) return
+        val data = runCatching {
+            BatteryHandler(applicationContext) { BridgeState.batteryLevel.intValue = it }
+                .handle(org.json.JSONObject())
+        }.getOrNull() ?: return
+        if (force || lastBattery != data.toString()) {
+            val queued = connectionManager?.sendEvent(org.json.JSONObject()
+                .put("kind", "event").put("event", "battery.changed").put("data", data)) == true
+            if (queued) lastBattery = data.toString()
+        }
+    }
     private var connectionManager: ConnectionManager? = null
 
     private val handler = Handler(Looper.getMainLooper())
@@ -73,6 +92,7 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        registerReceiver(batteryReceiver, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
         createNotificationChannel()
         startAsForegroundService()
@@ -140,6 +160,7 @@ class BridgeService : Service() {
             onStatusChanged = { status ->
                 if (status == ConnectionStatus.RECONNECT_REQUIRED) pairingRejected = true
                 BridgeState.connectionStatus.value = status
+                if (status == ConnectionStatus.CONNECTED) publishBattery(force = true)
             },
             onLog = BridgeState::addLog
         )
@@ -185,6 +206,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterReceiver(batteryReceiver)
         destroyed = true
         BridgeState.pairingFingerprint.value = null
         BridgeState.confirmFingerprint = null

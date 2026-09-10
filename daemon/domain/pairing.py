@@ -22,6 +22,7 @@ class PairingManager:
     def __init__(self, trusted_devices: TrustedDevices | None = None) -> None:
         self.trusted_devices = trusted_devices or TrustedDevices()
         self.fingerprint = ""
+        self.on_changed = lambda: None
         self._pending: dict[str, tuple[PairingRequest, asyncio.Future[bool]]] = {}
 
     def authenticate(self, device_id: str, token: str | None) -> bool:
@@ -31,6 +32,7 @@ class PairingManager:
         request = PairingRequest(uuid.uuid4().hex[:8], device_id, model, address, self.fingerprint)
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending[request.id] = (request, future)
+        self.on_changed()
         print(f"Pairing requested: {model} ({address}), id {request.id}")
         try:
             if await asyncio.wait_for(future, PAIRING_TIMEOUT_SECONDS):
@@ -40,6 +42,7 @@ class PairingManager:
             return False
         finally:
             self._pending.pop(request.id, None)
+            self.on_changed()
 
     def cancel_pending(self, device_id: str | None = None) -> None:
         for request, future in self._pending.values():

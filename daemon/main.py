@@ -14,12 +14,13 @@ async def main() -> None:
     server = DaemonServer()
     notifications = NotificationDispatcher()
     clipboard = ClipboardSync(server.registry)
+    advertisement = MdnsAdvertisement(server.port)
+    ipc_server = IpcServer(server.registry, server.pairing)
     server.on_event = lambda session, event, data: (
         notifications.dispatch(session, event, data),
         clipboard.dispatch(session, event, data),
+        ipc_server.battery_event(session, event, data),
     )
-    advertisement = MdnsAdvertisement(server.port)
-    ipc_server = IpcServer(server.registry, server.pairing)
     stop_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
