@@ -37,6 +37,7 @@ class DaemonServer:
         self.pairing = PairingManager()
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.Task] = set()
+        self._writers: set[asyncio.StreamWriter] = set()
 
     async def start(self) -> None:
         tls, self.pairing.fingerprint = server_identity()
@@ -56,11 +57,16 @@ class DaemonServer:
             return
 
         self._server.close()
-        await self._server.wait_closed()
-
-        for task in tuple(self._clients):
+        clients = tuple(self._clients)
+        for writer in tuple(self._writers):
+            writer.transport.abort()
+        if hasattr(self._server, "abort_clients"):
+            self._server.abort_clients()
+        for task in clients:
             task.cancel()
-        await asyncio.gather(*self._clients, return_exceptions=True)
+        await asyncio.gather(*clients, return_exceptions=True)
+        await self._server.wait_closed()
+        self._server = None
 
     async def _handle_client(
         self,
@@ -69,10 +75,12 @@ class DaemonServer:
     ) -> None:
         task = asyncio.current_task()
         self._clients.add(task)
+        self._writers.add(writer)
         try:
             await self._run_client(reader, writer)
         finally:
             self._clients.discard(task)
+            self._writers.discard(writer)
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()

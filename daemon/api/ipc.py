@@ -52,6 +52,7 @@ class IpcServer:
         self.pairing = pairing or PairingManager()
         self.socket_path = socket_path or get_ipc_socket_path()
         self._server: asyncio.Server | None = None
+        self._clients: dict[asyncio.Task, asyncio.StreamWriter] = {}
         self._handlers: dict[
             str,
             Callable[[Mapping[str, Any]], Awaitable[Any]],
@@ -82,6 +83,13 @@ class IpcServer:
     async def close(self) -> None:
         if self._server is not None:
             self._server.close()
+            clients = tuple(self._clients.items())
+            for task, writer in clients:
+                writer.transport.abort()
+                task.cancel()
+            if hasattr(self._server, "abort_clients"):
+                self._server.abort_clients()
+            await asyncio.gather(*(task for task, _ in clients), return_exceptions=True)
             await self._server.wait_closed()
             self._server = None
 
@@ -122,6 +130,8 @@ class IpcServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        task = asyncio.current_task()
+        self._clients[task] = writer
         try:
             while data := await reader.readline():
                 response = await self._dispatch(data)
@@ -130,6 +140,7 @@ class IpcServer:
         except (ConnectionError, BrokenPipeError):
             pass
         finally:
+            self._clients.pop(task, None)
             writer.close()
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
