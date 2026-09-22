@@ -43,6 +43,8 @@ target/
 .DS_Store
 Thumbs.db
 .vscode/
+*.zip
+
 
 android/app/src/main/res/mipmap-mdpi/
 android/app/src/main/res/mipmap-hdpi/
