@@ -31,6 +31,7 @@ import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 
 class BridgeService : Service() {
+    private lateinit var findPhone: io.github.belzenn.androidlinuxbridge.features.system.FindPhoneHandler
     private var lastBattery: String? = null
     private val batteryReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -94,6 +95,12 @@ class BridgeService : Service() {
         super.onCreate()
         registerReceiver(batteryReceiver, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
+        findPhone = io.github.belzenn.androidlinuxbridge.features.system.FindPhoneHandler(this) { ringing ->
+            connectionManager?.sendEvent(org.json.JSONObject()
+                .put("kind", "event").put("event", "find_phone.changed")
+                .put("data", org.json.JSONObject().put("ringing", ringing)))
+        }
+        BridgeState.stopFindingPhone = { findPhone.stop() }
         createNotificationChannel()
         startAsForegroundService()
 
@@ -131,6 +138,11 @@ class BridgeService : Service() {
             handlers = mapOf(
                 "battery.get" to batteryHandler::handle,
                 "system.ping" to pingHandler::handle,
+                "system.find_phone" to findPhone::handle,
+                "system.find_phone.stop" to {
+                    findPhone.stop()
+                    org.json.JSONObject().put("ringing", false)
+                },
                 "notifications.settings.get" to { NotificationSettings.get(applicationContext) },
                 "notifications.settings.set" to { NotificationSettings.set(applicationContext, it) },
                 "clipboard.history.replace" to { ClipboardHistory.replace(applicationContext, it) }
@@ -160,7 +172,10 @@ class BridgeService : Service() {
             onStatusChanged = { status ->
                 if (status == ConnectionStatus.RECONNECT_REQUIRED) pairingRejected = true
                 BridgeState.connectionStatus.value = status
-                if (status == ConnectionStatus.CONNECTED) publishBattery(force = true)
+                if (status == ConnectionStatus.CONNECTED) {
+                    publishBattery(force = true)
+                    findPhone.publishState()
+                }
             },
             onLog = BridgeState::addLog
         )
@@ -178,6 +193,10 @@ class BridgeService : Service() {
         flags: Int,
         startId: Int
     ): Int {
+        if (intent?.action == ACTION_STOP_FIND_PHONE) {
+            findPhone.stop()
+            return START_STICKY
+        }
         if (!ConnectionSettings.hasLocalNetworkPermission(this) || ConnectionSettings.loadServer(this) == null) {
             stopSelf()
             return START_NOT_STICKY
@@ -206,6 +225,8 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        findPhone.close()
+        BridgeState.stopFindingPhone = null
         unregisterReceiver(batteryReceiver)
         destroyed = true
         BridgeState.pairingFingerprint.value = null
@@ -279,6 +300,7 @@ class BridgeService : Service() {
     }
 
     companion object {
+        const val ACTION_STOP_FIND_PHONE = "io.github.belzenn.androidlinuxbridge.action.STOP_FIND_PHONE"
         private const val CHANNEL_ID = "bridge_connection"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_FORGET_PAIRING =

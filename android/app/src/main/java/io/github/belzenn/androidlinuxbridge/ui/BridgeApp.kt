@@ -74,6 +74,16 @@ fun BridgeApp(
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     AndroidLinuxBridgeTheme(darkTheme = dark, dynamicColor = false) {
+        if (BridgeState.findingPhone.value) {
+            AlertDialog(
+                onDismissRequest = { BridgeState.stopFindingPhone?.invoke() },
+                title = { Text("Find phone") },
+                text = { Text("Your computer is ringing this phone.") },
+                confirmButton = {
+                    Button(onClick = { BridgeState.stopFindingPhone?.invoke() }) { Text("Stop ringing") }
+                }
+            )
+        }
         BridgeState.pairingFingerprint.value?.let { fingerprint ->
             AlertDialog(
                 onDismissRequest = { BridgeState.confirmFingerprint?.invoke(false) },

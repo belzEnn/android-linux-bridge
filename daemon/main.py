@@ -20,6 +20,7 @@ async def main() -> None:
         notifications.dispatch(session, event, data),
         clipboard.dispatch(session, event, data),
         ipc_server.battery_event(session, event, data),
+        ipc_server.find_phone_event(session, event, data),
     )
     stop_event = asyncio.Event()
 

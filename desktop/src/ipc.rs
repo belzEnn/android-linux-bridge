@@ -24,6 +24,8 @@ pub enum Command {
         device_id: String,
     },
     ResetTrusted,
+    FindPhone { device_id: String },
+    StopFindPhone { device_id: String },
     Notifications {
         device_id: String,
         change: Option<(String, bool)>,
@@ -117,6 +119,31 @@ async fn run(command_rx: Receiver<Command>, event_tx: Sender<Event>) {
                     active_client
                         .request::<Value>("pairing.revoke", json!({"device_id": device_id}))
                         .await
+                }
+                Command::StopFindPhone { device_id } => {
+                    let result = active_client.request::<Value>("system.find_phone.stop",
+                        json!({"device_id": device_id})).await;
+                    if let Err(error) = result {
+                        let _ = event_tx.send(Event::Error(error));
+                        if !active_client.reusable {
+                            disconnected = true;
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                Command::FindPhone { device_id } => {
+                    let result = active_client.request::<Value>("system.find_phone",
+                        json!({"device_id": device_id})).await;
+                    match &result {
+                        Ok(_) => {}
+                        Err(error) => { let _ = event_tx.send(Event::Error(error.clone())); }
+                    }
+                    if result.is_err() && !active_client.reusable {
+                        disconnected = true;
+                        break;
+                    }
+                    continue;
                 }
                 Command::ResetTrusted => {
                     active_client

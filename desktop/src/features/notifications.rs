@@ -334,6 +334,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 42,
             active: true,
+            finding_phone: false,
         }]));
         let (tx, rx) = mpsc::channel();
         let parent = adw::ApplicationWindow::builder().build();

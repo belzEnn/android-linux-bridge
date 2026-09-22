@@ -10,6 +10,8 @@ pub struct Device {
     pub model: String,
     #[serde(default)]
     pub active: bool,
+    #[serde(default)]
+    pub finding_phone: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

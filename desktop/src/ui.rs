@@ -29,6 +29,7 @@ struct Widgets {
     window: adw::ApplicationWindow,
     device_name: gtk::Label,
     status: gtk::Label,
+    find_phone: gtk::Button,
     battery_card: gtk::Box,
     battery_level: gtk::Label,
     battery_progress: gtk::ProgressBar,
@@ -147,6 +148,26 @@ pub fn build(
     window.set_content(Some(&root));
 
     let state = Rc::new(RefCell::new(State::default()));
+    let find_phone = gtk::Button::with_label("Find phone");
+    find_phone.set_sensitive(false);
+    find_phone.connect_clicked({
+        let state = state.clone();
+        let tx = command_tx.clone();
+        move |_| {
+            if let Some(device) = state.borrow().devices.iter().find(|device| device.active) {
+                let command = if device.finding_phone {
+                    Command::StopFindPhone { device_id: device.device_id.clone() }
+                } else {
+                    Command::FindPhone { device_id: device.device_id.clone() }
+                };
+                let _ = tx.send(command);
+            }
+        }
+    });
+    find_phone.set_halign(gtk::Align::Center);
+    find_phone.set_size_request(180, 44);
+    find_phone.add_css_class("pill");
+    content.append(&find_phone);
     let notification_state = state.clone();
     let notifications = crate::features::notifications::page(
         move || notification_state.borrow().devices.clone(),
@@ -173,6 +194,7 @@ pub fn build(
         window: window.clone(),
         device_name,
         status,
+        find_phone,
         battery_card,
         battery_level,
         battery_progress,
@@ -353,12 +375,16 @@ fn handle_event(
     match event {
         Event::Online => set_status(&widgets.status, "●  No device connected", false),
         Event::Offline => {
+            widgets.find_phone.set_sensitive(false);
+            update_find_phone_button(&widgets.find_phone, false);
             state.borrow_mut().devices.clear();
             widgets.device_name.set_label("Android device");
             widgets.battery_card.set_visible(false);
             set_status(&widgets.status, "●  Daemon offline", false);
         }
         Event::Devices(devices) => {
+            widgets.find_phone.set_sensitive(devices.iter().any(|device| device.active));
+            update_find_phone_button(&widgets.find_phone, devices.iter().any(|device| device.active && device.finding_phone));
             state.borrow_mut().devices = devices.clone();
             if let Some(device) = devices.iter().find(|device| device.active) {
                 widgets.device_name.set_label(&device.model);
@@ -373,6 +399,15 @@ fn handle_event(
         Event::Pairings(requests) => show_new_pairings(widgets, state, command_tx, requests),
         Event::Trusted(devices) => state.borrow_mut().trusted = devices,
         Event::Error(message) => show_error(&widgets.window, &message),
+    }
+}
+
+fn update_find_phone_button(button: &gtk::Button, ringing: bool) {
+    button.set_label(if ringing { "Stop ringing" } else { "Find phone" });
+    if ringing {
+        button.add_css_class("destructive-action");
+    } else {
+        button.remove_css_class("destructive-action");
     }
 }
 

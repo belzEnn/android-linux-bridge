@@ -61,6 +61,8 @@ class IpcServer:
             Callable[[Mapping[str, Any]], Awaitable[Any]],
         ] = {
             "battery.get": self._battery_get,
+            "system.find_phone": self._find_phone,
+            "system.find_phone.stop": self._stop_find_phone,
             "notifications.settings.get": self._notifications_get,
             "notifications.settings.set": self._notifications_set,
             "devices.list": self._devices_list,
@@ -161,6 +163,11 @@ class IpcServer:
             if not queue.full():
                 queue.put_nowait(None)
 
+    def find_phone_event(self, session, event, data) -> None:
+        if event == "find_phone.changed" and type(data.get("ringing")) is bool:
+            session.finding_phone = data["ringing"]
+            self.state_changed()
+
     def battery_event(self, session, event, data) -> None:
         if event != "battery.changed":
             return
@@ -254,8 +261,14 @@ class IpcServer:
 
         return make_response(request_id, result)
 
+    async def _stop_find_phone(self, params: Mapping[str, Any]) -> Any:
+        return await self._device_request("system.find_phone.stop", params)
+
+    async def _find_phone(self, params: Mapping[str, Any]) -> Any:
+        return await self._device_request("system.find_phone", params)
+
     async def _notifications_get(self, params: Mapping[str, Any]) -> Any:
-        return await self._notifications_request("notifications.settings.get", params)
+        return await self._device_request("notifications.settings.get", params)
 
     async def _notifications_set(self, params: Mapping[str, Any]) -> Any:
         if (
@@ -264,9 +277,9 @@ class IpcServer:
             or not isinstance(params.get("enabled"), bool)
         ):
             raise IpcRequestError("INVALID_REQUEST", "Expected package and enabled")
-        return await self._notifications_request("notifications.settings.set", params)
+        return await self._device_request("notifications.settings.set", params)
 
-    async def _notifications_request(
+    async def _device_request(
         self, method: str, params: Mapping[str, Any],
     ) -> Any:
         device_id = params.get("device_id")
@@ -308,6 +321,7 @@ class IpcServer:
                 "device_id": session.device_id,
                 "model": session.model,
                 "active": session is active,
+                "finding_phone": getattr(session, "finding_phone", False),
             }
             for session in self.registry.sessions
         ]
