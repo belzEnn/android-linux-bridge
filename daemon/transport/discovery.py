@@ -40,7 +40,8 @@ class MdnsAdvertisement:
 
     async def start(self) -> None:
         try:
-            from zeroconf import ServiceInfo, Zeroconf
+            from zeroconf import ServiceInfo
+            from zeroconf.asyncio import AsyncZeroconf
         except ImportError as exception:
             raise RuntimeError(
                 "mDNS support requires the 'zeroconf' package; "
@@ -50,7 +51,7 @@ class MdnsAdvertisement:
         hostname = socket.gethostname()
         address = local_ipv4_address()
         service_name = f"{hostname}.{SERVICE_TYPE}"
-        self._zeroconf = Zeroconf()
+        self._zeroconf = AsyncZeroconf()
         self._service_info = ServiceInfo(
             SERVICE_TYPE,
             service_name,
@@ -63,20 +64,24 @@ class MdnsAdvertisement:
             },
             server=f"{hostname}.local.",
         )
-        await asyncio.to_thread(
-            self._zeroconf.register_service,
-            self._service_info,
-        )
+        await self._zeroconf.async_register_service(self._service_info)
         print(f"mDNS advertising: {service_name}")
 
     async def close(self) -> None:
         if self._zeroconf is None:
             return
-        if self._service_info is not None:
-            await asyncio.to_thread(
-                self._zeroconf.unregister_service,
-                self._service_info,
-            )
-        await asyncio.to_thread(self._zeroconf.close)
-        self._service_info = None
+        zeroconf = self._zeroconf
+        service_info = self._service_info
         self._zeroconf = None
+        self._service_info = None
+        try:
+            if service_info is not None:
+                try:
+                    await asyncio.wait_for(
+                        zeroconf.async_unregister_service(service_info),
+                        timeout=1.0,
+                    )
+                except asyncio.TimeoutError:
+                    pass
+        finally:
+            await zeroconf.async_close()

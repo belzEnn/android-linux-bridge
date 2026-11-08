@@ -10,6 +10,15 @@ from .transport.android_server import DaemonServer
 from .transport.discovery import MdnsAdvertisement
 
 
+async def _safe_close(name: str, close_coro, timeout: float = 3.0) -> None:
+    try:
+        await asyncio.wait_for(close_coro, timeout)
+    except asyncio.TimeoutError:
+        logging.getLogger(__name__).warning("%s close timed out", name)
+    except Exception:
+        logging.getLogger(__name__).exception("%s close failed", name)
+
+
 async def main() -> None:
     server = DaemonServer()
     notifications = NotificationDispatcher()
@@ -38,12 +47,12 @@ async def main() -> None:
             print("Daemon is running...")
             await stop_event.wait()
         finally:
-            await ipc_server.close()
+            await _safe_close("IPC server", ipc_server.close())
     finally:
-        await advertisement.close()
-        await server.close()
-        await clipboard.close()
-        await notifications.close()
+        await _safe_close("server", server.close())
+        await _safe_close("clipboard", clipboard.close())
+        await _safe_close("notifications", notifications.close())
+        await _safe_close("advertisement", advertisement.close())
 
 
 def run() -> None:

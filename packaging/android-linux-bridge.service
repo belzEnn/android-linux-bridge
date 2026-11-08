@@ -7,6 +7,7 @@ Type=simple
 ExecStart=/usr/local/bin/android-linux-bridge-daemon
 Restart=on-failure
 RestartSec=3
+TimeoutStopSec=10
 
 [Install]
 WantedBy=default.target
