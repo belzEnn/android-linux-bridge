@@ -8,6 +8,7 @@ import org.json.JSONObject
 /** The bridge owns the transport; the listener never starts a second connection. */
 object NotificationForwarder {
     @Volatile var send: ((JSONObject) -> Unit)? = null
+    @Volatile var dismiss: ((String) -> Boolean)? = null
 }
 
 class NotificationForwardingService : NotificationListenerService() {
@@ -15,15 +16,18 @@ class NotificationForwardingService : NotificationListenerService() {
 
     override fun onListenerConnected() {
         NotificationSettings.listenerConnected = true
+        NotificationForwarder.dismiss = { key -> runCatching { cancelNotification(key) }.isSuccess }
     }
 
     override fun onListenerDisconnected() {
         NotificationSettings.listenerConnected = false
+        NotificationForwarder.dismiss = null
         policy.clear()
     }
 
     override fun onDestroy() {
         NotificationSettings.listenerConnected = false
+        NotificationForwarder.dismiss = null
         policy.clear()
         super.onDestroy()
     }
@@ -42,6 +46,11 @@ class NotificationForwardingService : NotificationListenerService() {
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
-        policy.remove(sbn.key)
+        if (policy.remove(sbn.key)) {
+            NotificationForwarder.send?.invoke(
+                JSONObject().put("kind", "event").put("event", "notification.removed")
+                    .put("data", JSONObject().put("id", sbn.key))
+            )
+        }
     }
 }

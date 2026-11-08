@@ -2,6 +2,7 @@ package io.github.belzenn.androidlinuxbridge.service
 
 import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationForwarder
 import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationSettings
+import io.github.belzenn.androidlinuxbridge.features.notifications.NotificationDismissHandler
 import io.github.belzenn.androidlinuxbridge.features.clipboard.ClipboardForwarder
 import io.github.belzenn.androidlinuxbridge.features.clipboard.ClipboardHistory
 import android.app.NotificationChannel
@@ -133,11 +134,13 @@ class BridgeService : Service() {
             BridgeState.batteryLevel.intValue = level
         }
         val pingHandler = PingHandler()
+        val notificationDismissHandler = NotificationDismissHandler()
 
         val messageRouter = MessageRouter(
             handlers = mapOf(
                 "battery.get" to batteryHandler::handle,
                 "system.ping" to pingHandler::handle,
+                "notification.dismiss" to notificationDismissHandler::handle,
                 "system.find_phone" to findPhone::handle,
                 "system.find_phone.stop" to {
                     findPhone.stop()

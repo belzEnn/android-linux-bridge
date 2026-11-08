@@ -15,6 +15,6 @@ class NotificationPolicy(private val ownPackage: String, private val capacity: I
         return true
     }
 
-    fun remove(key: String) { seen.remove(key) }
+    fun remove(key: String): Boolean = seen.remove(key) != null
     fun clear() { seen.clear() }
 }

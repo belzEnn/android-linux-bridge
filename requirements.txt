@@ -1,2 +1,3 @@
 zeroconf>=0.148,<1
 cryptography>=43
+dbus-fast>=2.24,<3
