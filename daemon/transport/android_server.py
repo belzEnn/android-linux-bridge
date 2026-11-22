@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import ssl
 from .tls import server_identity
 
 from .android_session import AndroidSession
@@ -21,9 +22,13 @@ class SessionRegistry:
         sessions = self.sessions
         return sessions[-1] if sessions else None
 
-    def add(self, session: AndroidSession) -> None:
+    def add(self, session: AndroidSession) -> AndroidSession | None:
+        previous = next((current for current in self._sessions if current.device_id == session.device_id), None)
+        if previous is not None:
+            self._sessions.remove(previous)
         self._sessions.append(session)
         self.on_changed()
+        return previous
 
     def remove(self, session: AndroidSession) -> None:
         if session in self._sessions:
@@ -37,19 +42,21 @@ class DaemonServer:
         self.port = port
         self.registry = SessionRegistry()
         self.on_event = None
+        self.bluetooth_address = None
         self.pairing = PairingManager()
+        self.tls_context: ssl.SSLContext | None = None
         self._server: asyncio.Server | None = None
         self._clients: set[asyncio.Task] = set()
         self._writers: set[asyncio.StreamWriter] = set()
 
     async def start(self) -> None:
-        tls, self.pairing.fingerprint = server_identity()
+        self.tls_context, self.pairing.fingerprint = server_identity()
         self._server = await asyncio.start_server(
             self._handle_client,
             host=self.host,
             port=self.port,
             limit=MAX_MESSAGE_BYTES,
-            ssl=tls,
+            ssl=self.tls_context,
             ssl_handshake_timeout=10.0,
             ssl_shutdown_timeout=3.0,
         )
@@ -88,8 +95,13 @@ class DaemonServer:
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
 
-    async def _run_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        identity = await self._pair_client(reader, writer)
+    async def bluetooth_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await self._run_client(reader, writer, transport="bluetooth")
+
+    async def _run_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, transport: str = "wifi"
+    ) -> None:
+        identity = await self._pair_client(reader, writer, trusted_only=transport == "bluetooth")
         if identity is None:
             writer.close()
             with contextlib.suppress(ConnectionError):
@@ -97,10 +109,12 @@ class DaemonServer:
             return
 
         device_id, model = identity
-        session = AndroidSession(reader, writer, device_id, model, self.on_event)
-        self.registry.add(session)
-        print(f"Android connected: {session.address}")
+        session = AndroidSession(reader, writer, device_id, model, self.on_event, transport=transport)
+        previous = self.registry.add(session)
+        print(f"Android connected via {transport}: {session.address}")
 
+        # The authenticated replacement can serve requests while the old TLS socket drains.
+        closing_previous = asyncio.create_task(previous.close()) if previous is not None else None
         try:
             await session.run()
         except ConnectionError as exception:
@@ -108,10 +122,12 @@ class DaemonServer:
         finally:
             self.registry.remove(session)
             await session.close()
-            print(f"Android disconnected: {session.address}")
+            if closing_previous is not None:
+                await asyncio.gather(closing_previous, return_exceptions=True)
+            print(f"Android disconnected from {transport}: {session.address}")
 
     async def _pair_client(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, trusted_only: bool = False
     ) -> tuple[str, str] | None:
         address = writer.get_extra_info("peername")
         try:
@@ -135,7 +151,7 @@ class DaemonServer:
             if authenticated:
                 response = make_response(request_id, {"accepted": True})
             else:
-                if token is not None:
+                if trusted_only or token is not None:
                     response = make_error(request_id, "PAIRING_REJECTED", "Pairing expired or revoked; forget this computer and pair again")
                 else:
                     # Both approvals belong to this connection; never issue a token on disconnect.
@@ -163,9 +179,31 @@ class DaemonServer:
                     finally:
                         approval.cancel()
                         await asyncio.gather(approval, return_exceptions=True)
+            result = response.get("result")
+            if authenticated and not trusted_only and isinstance(result, dict):
+                result["periodic_heartbeat"] = True
+                if self.bluetooth_address:
+                    result["bluetooth_address"] = self.bluetooth_address
             writer.write(encode_message(response))
             await writer.drain()
             return (device_id, model) if authenticated else None
         except (TimeoutError, ProtocolError, ConnectionError, ValueError) as exception:
             print(f"Pairing failed from {address}: {exception}")
             return None
+
+    async def probe_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        identity = await self._pair_client(reader, writer, trusted_only=True)
+        if identity is None:
+            return
+
+        # A probe must never take over the working phone session.
+        session = AndroidSession(reader, writer, *identity)
+        receive = asyncio.create_task(session.receive_loop())
+        try:
+            result = await session.request("system.ping", timeout=5.0)
+            if not isinstance(result, dict) or result.get("pong") is not True:
+                raise ProtocolError("Invalid Bluetooth ping response")
+            print("Bluetooth probe: authenticated system.ping succeeded", flush=True)
+        finally:
+            receive.cancel()
+            await asyncio.gather(receive, return_exceptions=True)

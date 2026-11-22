@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
+import logging
 import socket
+import struct
 from pathlib import Path
 
 SERVICE_TYPE = "_albridge._tcp.local."
@@ -21,15 +24,19 @@ def linux_distribution() -> str:
         return "Linux"
 
 
-def local_ipv4_address() -> str:
-    """Find the address used for outbound LAN traffic without sending a packet."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        sock.connect(("192.0.2.1", 9))
-        address = sock.getsockname()[0]
-        return address if not address.startswith("127.") else "127.0.0.1"
-    finally:
-        sock.close()
+def local_ipv4_addresses() -> tuple[str, ...]:
+    """Collect interface addresses even on a LAN with no default Internet route."""
+    addresses = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        for _, name in socket.if_nameindex():
+            request = struct.pack("256s", name.encode()[:15])
+            try:
+                flags = struct.unpack_from("H", fcntl.ioctl(sock, 0x8913, request), 16)[0]
+                if flags & 0x1 and not flags & 0x8:  # IFF_UP, IFF_LOOPBACK
+                    addresses.add(socket.inet_ntoa(fcntl.ioctl(sock, 0x8915, request)[20:24]))
+            except OSError:
+                continue
+    return tuple(sorted(addresses))
 
 
 class MdnsAdvertisement:
@@ -38,7 +45,32 @@ class MdnsAdvertisement:
         self._zeroconf = None
         self._service_info = None
 
-    async def start(self) -> None:
+    async def run(self) -> None:
+        current_address = None
+        last_error = None
+        try:
+            while True:
+                try:
+                    address = local_ipv4_addresses()
+                    if address != current_address:
+                        await self.close()
+                        current_address = None
+                        if address:
+                            await self.start(address)
+                        current_address = address
+                    last_error = None
+                except (OSError, RuntimeError) as exception:
+                    if str(exception) != last_error:
+                        last_error = str(exception)
+                        logging.getLogger(__name__).info("mDNS unavailable: %s", exception)
+                    if current_address is not None:
+                        await self.close()
+                        current_address = None
+                await asyncio.sleep(5)
+        finally:
+            await self.close()
+
+    async def start(self, addresses: tuple[str, ...]) -> None:
         try:
             from zeroconf import ServiceInfo
             from zeroconf.asyncio import AsyncZeroconf
@@ -49,13 +81,12 @@ class MdnsAdvertisement:
             ) from exception
 
         hostname = socket.gethostname()
-        address = local_ipv4_address()
         service_name = f"{hostname}.{SERVICE_TYPE}"
         self._zeroconf = AsyncZeroconf()
         self._service_info = ServiceInfo(
             SERVICE_TYPE,
             service_name,
-            addresses=[socket.inet_aton(address)],
+            addresses=[socket.inet_aton(address) for address in addresses],
             port=self.port,
             properties={
                 "computer_name": hostname,

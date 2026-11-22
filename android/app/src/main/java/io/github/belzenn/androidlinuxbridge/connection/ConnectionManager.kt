@@ -1,5 +1,7 @@
 package io.github.belzenn.androidlinuxbridge.connection
 
+import android.bluetooth.BluetoothDevice
+import android.net.Network
 import android.os.Handler
 import android.os.Looper
 import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
@@ -7,23 +9,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
 import org.json.JSONException
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.BufferedWriter
 import java.io.IOException
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.net.InetSocketAddress
-import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLHandshakeException
-import java.security.cert.X509Certificate
 import kotlinx.coroutines.CompletableDeferred
-import java.net.Socket
 
 enum class ConnectionStatus {
     CONNECTING,
@@ -45,7 +40,10 @@ class ConnectionManager(
     private val onLog: (String) -> Unit,
     private var pinnedKey: String? = null,
     private val onTrustReceived: (String, String) -> Unit = { _, _ -> },
-    private val onFingerprint: (String?, ((Boolean) -> Unit)?) -> Unit = { _, _ -> }
+    private val onFingerprint: (String?, ((Boolean) -> Unit)?) -> Unit = { _, _ -> },
+    private val bluetooth: BluetoothDevice? = null,
+    private val network: Network? = null,
+    private val onBluetoothAddress: (String) -> Unit = {},
 ) {
     private val scope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,21 +54,19 @@ class ConnectionManager(
     private var running = false
 
     @Volatile
-    private var socket: Socket? = null
-
-    private var writer: BufferedWriter? = null
+    private var connection: SessionConnection? = null
     @Volatile private var authenticated = false
     private val wakeUp = Channel<Unit>(Channel.CONFLATED)
     @Volatile private var stopped = false
     @Volatile private var confirmation: CompletableDeferred<Boolean>? = null
-    private val events = Channel<Pair<Socket, JSONObject>>(100)
+    private val events = Channel<Pair<SessionConnection, JSONObject>>(100)
 
     init {
         scope.launch {
             for ((connection, event) in events) {
                 try {
                     synchronized(writerLock) {
-                        if (authenticated && socket === connection) {
+                        if (authenticated && this@ConnectionManager.connection === connection) {
                             sendMessage(event)
                             val name = event.optString("event", "unknown")
                             val details = if (name == "battery.changed") {
@@ -83,15 +79,15 @@ class ConnectionManager(
                     }
                 } catch (_: IOException) {
                     // Wake the receive loop and let its normal reconnect path recover.
-                    try { connection.close() } catch (_: IOException) { }
+                    closeSocket(connection)
                 }
             }
         }
     }
 
     fun sendEvent(event: JSONObject): Boolean {
-        val connection = socket ?: return false
-        return authenticated && events.trySend(connection to event).isSuccess
+        val connection = connection ?: return false
+        return !stopped && authenticated && events.trySend(connection to event).isSuccess
     }
 
     fun start() {
@@ -106,18 +102,31 @@ class ConnectionManager(
     fun reconnect() {
         if (stopped) return
         notifyLog("Reconnect requested")
-        closeConnection()
-        wakeUp.trySend(Unit)
+        val connection = connection
+        confirmation?.complete(false)
+        scope.launch {
+            closeSocket(connection)
+            wakeUp.trySend(Unit)
+        }
         start()
     }
 
     fun stop() {
+        if (stopped) return
         stopped = true
         running = false
-        closeConnection()
+        authenticated = false
+        confirmation?.complete(false)
         wakeUp.cancel()
         events.cancel()
-        scope.cancel()
+        // A TLS socket can write close_notify, even when triggered by a network callback.
+        scope.launch {
+            try {
+                closeSocket(connection)
+            } finally {
+                scope.cancel()
+            }
+        }
     }
 
     private suspend fun connectionLoop() {
@@ -127,46 +136,43 @@ class ConnectionManager(
             var rejected = false
 
             notifyStatus(ConnectionStatus.CONNECTING)
-            notifyLog("Connecting to $host:$port...")
+            val endpoint = bluetooth?.let { "Bluetooth" } ?: "$host:$port"
+            notifyLog("Connecting to $endpoint...")
 
             try {
-                val serverAddress = InetSocketAddress(host, port)
-                val connectedSocket = (BridgeTls.context(pinnedKey).socketFactory.createSocket() as SSLSocket).apply {
-                    socket = this
-                    if (!running) {
-                        close()
-                        throw IOException("Connection stopped")
+                val channel = if (bluetooth == null) {
+                    LanSessionConnection(host, port, pinnedKey, network)
+                } else {
+                    val pin = pinnedKey?.takeIf { it.isNotBlank() }
+                    if (pin == null || pairingToken.isNullOrBlank()) {
+                        throw PairingRejectedException("Pair this computer through Wi-Fi first")
                     }
-                    keepAlive = true
-                    enabledProtocols = supportedProtocols.filter { it == "TLSv1.2" || it == "TLSv1.3" }.toTypedArray()
-                    soTimeout = 10_000
-                    connect(serverAddress, CONNECT_TIMEOUT_MS)
-                    startHandshake()
-                    soTimeout = 65_000
+                    BluetoothSessionConnection(bluetooth, pin)
                 }
-
-                if (!running) {
-                    connectedSocket.close()
-                    break
+                connection = channel
+                if (!running) break
+                val deadline = bluetooth?.let {
+                    scope.launch {
+                        delay(25_000)
+                        closeSocket(channel)
+                    }
                 }
-                writer = BufferedWriter(
-                    OutputStreamWriter(
-                        connectedSocket.getOutputStream(), Charsets.UTF_8
-                    )
-                )
-                notifyStatus(ConnectionStatus.AWAITING_APPROVAL)
-                notifyLog("Waiting for computer approval")
-                val reader = BufferedReader(InputStreamReader(connectedSocket.getInputStream(), Charsets.UTF_8))
-                val fingerprint = BridgeTls.fingerprint(connectedSocket.session.peerCertificates[0] as X509Certificate)
-                performPairing(reader, fingerprint)
-                connectedSocket.soTimeout = 0
+                try {
+                    val fingerprint = channel.connect()
+                    if (!running) break
+                    notifyStatus(ConnectionStatus.AWAITING_APPROVAL)
+                    val heartbeatTimeout = performPairing(channel, fingerprint)
+                    channel.authenticated(heartbeatTimeout)
+                } finally {
+                    deadline?.cancel()
+                }
                 authenticated = true
                 retry.reset()
 
                 notifyStatus(ConnectionStatus.CONNECTED)
-                notifyLog("Connected to Linux daemon")
+                notifyLog("Connected to Linux daemon via $endpoint")
 
-                listenForMessages(reader)
+                listenForMessages(channel)
             } catch (exception: Exception) {
                 rejected = exception is PairingRejectedException || exception is SSLHandshakeException
                 if (running) {
@@ -178,7 +184,6 @@ class ConnectionManager(
                 }
             } finally {
                 closeConnection()
-                notifyStatus(ConnectionStatus.DISCONNECTED)
             }
 
             if (!running) break
@@ -189,6 +194,7 @@ class ConnectionManager(
                 wakeUp.receive()
                 retry.reset()
             } else {
+                notifyStatus(ConnectionStatus.DISCONNECTED)
                 val delayMs = retry.nextDelayMs()
                 notifyLog("Reconnecting in ${delayMs / 1000} seconds")
                 withTimeoutOrNull(delayMs) { wakeUp.receive() }
@@ -196,7 +202,7 @@ class ConnectionManager(
         }
     }
 
-    private fun listenForMessages(reader: BufferedReader) {
+    private fun listenForMessages(reader: SessionConnection) {
         while (running) {
             val line = reader.readLine() ?: break
             try {
@@ -222,7 +228,7 @@ class ConnectionManager(
         }
     }
 
-    private suspend fun performPairing(reader: BufferedReader, fingerprint: String) {
+    private suspend fun performPairing(reader: SessionConnection, fingerprint: String): Int {
         val pairingRequest = JSONObject()
             .put("kind", "request")
             .put("id", "pairing")
@@ -245,12 +251,16 @@ class ConnectionManager(
         var expectedId = "pairing"
         if (message.optString("kind") == "response" && message.optString("id") == "pairing" &&
             message.optJSONObject("result")?.optBoolean("confirmation_required") == true) {
+            if (bluetooth != null) throw PairingRejectedException("Pair this computer through Wi-Fi first")
             val decision = CompletableDeferred<Boolean>()
             confirmation = decision
             mainHandler.post { if (!stopped && !decision.isCompleted) onFingerprint(fingerprint) { decision.complete(it) } }
-            val accepted = withTimeoutOrNull(60_000) { decision.await() } == true
-            mainHandler.post { onFingerprint(null, null) }
-            confirmation = null
+            val accepted = try {
+                withTimeoutOrNull(60_000) { decision.await() } == true
+            } finally {
+                confirmation = null
+                mainHandler.post { onFingerprint(null, null) }
+            }
             if (!accepted) throw PairingRejectedException("Fingerprint confirmation cancelled")
             sendMessage(JSONObject().put("kind", "request").put("id", "confirm")
                 .put("method", "pairing.confirm").put("params", JSONObject().put("accepted", true)))
@@ -274,6 +284,7 @@ class ConnectionManager(
             throw IOException("Pairing response has no token")
         }
         if (stopped || !running) throw IOException("Connection stopped")
+        if (bluetooth != null) return 0
         message.optJSONObject("result")
             ?.optString("pairing_token")
             ?.takeIf { it.isNotBlank() }
@@ -287,37 +298,32 @@ class ConnectionManager(
                 if (!stopped) onPairingTokenReceived(it)
                 notifyLog("Computer pairing saved")
             }
+        message.optJSONObject("result")?.optString("bluetooth_address")
+            ?.takeIf { it.isNotBlank() }
+            ?.let { address -> mainHandler.post { if (!stopped) onBluetoothAddress(address) } }
+        return if (message.optJSONObject("result")?.optBoolean("periodic_heartbeat") == true) 50_000 else 0
     }
 
     private fun sendMessage(message: JSONObject) {
         synchronized(writerLock) {
-            val currentWriter = writer
-                ?: throw IOException("Connection is not available")
-
-            currentWriter.write(message.toString())
-            currentWriter.newLine()
-            currentWriter.flush()
+            val channel = connection ?: throw IOException("Connection is not available")
+            channel.writeLine(message.toString())
         }
     }
 
     private fun closeConnection() {
-        confirmation?.complete(false)
-        mainHandler.post { onFingerprint(null, null) }
         authenticated = false
         // Closing the socket first interrupts any blocked writer before taking its lock.
-        try { socket?.close() } catch (_: IOException) { }
+        closeSocket(connection)
         synchronized(writerLock) {
-            try {
-                writer?.close()
-            } catch (_: Exception) {
-            }
-            writer = null
+            connection = null
+        }
+    }
 
-            try {
-                socket?.close()
-            } catch (_: Exception) {
-            }
-            socket = null
+    private fun closeSocket(connection: SessionConnection?) {
+        try {
+            connection?.close()
+        } catch (_: IOException) {
         }
     }
 
@@ -331,10 +337,6 @@ class ConnectionManager(
         mainHandler.post {
             if (!stopped) onLog(message)
         }
-    }
-
-    private companion object {
-        const val CONNECT_TIMEOUT_MS = 3_000
     }
 }
 

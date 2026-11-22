@@ -388,7 +388,11 @@ fn handle_event(
             state.borrow_mut().devices = devices.clone();
             if let Some(device) = devices.iter().find(|device| device.active) {
                 widgets.device_name.set_label(&device.model);
-                set_status(&widgets.status, "●  Connected", true);
+                let status = match device.transport.as_deref() {
+                    Some("bluetooth") => "●  Connected via Bluetooth",
+                    _ => "●  Connected",
+                };
+                set_status(&widgets.status, status, true);
             } else {
                 widgets.device_name.set_label("Android device");
                 widgets.battery_card.set_visible(false);
@@ -462,10 +466,18 @@ fn show_new_pairings(
         if !state.borrow_mut().shown_pairings.insert(request.id.clone()) {
             continue;
         }
-        let dialog = adw::AlertDialog::new(
-            Some("Pair new device?"),
-            Some(&format!("{} from {}\n\nCompare this SHA-256 key fingerprint with your phone. Approve only if every group matches.\n\n{}", request.model, request.address, request.fingerprint.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" "))),
-        );
+        let (title, message) = if let Some(passkey) = &request.bluetooth_passkey {
+            (
+                "Enable Bluetooth backup?",
+                format!("{} from {}\n\nConfirm that Android displays the same Bluetooth pairing code.\n\n{passkey}", request.model, request.address),
+            )
+        } else {
+            (
+                "Pair new device?",
+                format!("{} from {}\n\nCompare this SHA-256 key fingerprint with your phone. Approve only if every group matches.\n\n{}", request.model, request.address, request.fingerprint.as_bytes().chunks(4).map(|c| std::str::from_utf8(c).unwrap()).collect::<Vec<_>>().join(" ")),
+            )
+        };
+        let dialog = adw::AlertDialog::new(Some(title), Some(&message));
         dialog.add_responses(&[("deny", "Deny"), ("allow", "Allow")]);
         dialog.set_default_response(Some("deny"));
         dialog.set_response_appearance("allow", adw::ResponseAppearance::Suggested);

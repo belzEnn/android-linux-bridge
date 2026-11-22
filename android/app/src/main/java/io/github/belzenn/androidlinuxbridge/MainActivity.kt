@@ -31,21 +31,23 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         refreshSetupStatus()
-        if (hasLocalNetworkPermission()) {
-            BridgeService.start(this)
-            discovery.start()
-        }
+        BridgeService.start(this)
+        if (hasLocalNetworkPermission()) discovery.start()
     }
 
     private lateinit var discovery: ComputerDiscoveryManager
+    private val bluetoothPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (it) BridgeService.setupBluetooth(this)
+        else BridgeState.bluetoothSetupMessage.value = "Nearby devices access is required for Bluetooth backup."
+    }
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) {
         refreshSetupStatus()
+        BridgeService.start(this)
         if (hasLocalNetworkPermission()) {
-            BridgeService.start(this)
             discovery.start()
-        } else {
+        } else if (!ConnectionSettings.canUseBluetoothBackup(this)) {
             BridgeState.connectionStatus.value = ConnectionStatus.RECONNECT_REQUIRED
             BridgeState.addLog("Local network permission is required")
         }
@@ -71,13 +73,22 @@ class MainActivity : ComponentActivity() {
                 onBatterySettings = { openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) },
                 onComputerSelected = ::selectComputer,
                 onReconnect = {
-                    if (hasLocalNetworkPermission()) BridgeService.reconnect(this)
+                    if (BridgeState.bluetoothBackupReady.value || hasLocalNetworkPermission()) BridgeService.reconnect(this)
                     else requestRequiredPermissions()
                 },
-                onAddClipboardTile = ::addClipboardTile
+                onAddClipboardTile = ::addClipboardTile,
+                onSetupBluetooth = ::setupBluetoothBackup
             )
         }
         BridgeState.addLog("Application opened")
+    }
+
+    private fun setupBluetoothBackup() {
+        if (ConnectionSettings.hasBluetoothPermission(this)) {
+            BridgeService.setupBluetooth(this)
+        } else {
+            bluetoothPermissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+        }
     }
 
     private fun refreshSetupStatus() {

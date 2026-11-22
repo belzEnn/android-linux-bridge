@@ -59,7 +59,8 @@ fun BridgeApp(
     onBatterySettings: () -> Unit,
     onComputerSelected: (DiscoveredComputer) -> Unit,
     onReconnect: () -> Unit,
-    onAddClipboardTile: () -> Unit
+    onAddClipboardTile: () -> Unit,
+    onSetupBluetooth: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val preferences = remember { context.getSharedPreferences("bridge_appearance", Context.MODE_PRIVATE) }
@@ -122,7 +123,7 @@ fun BridgeApp(
                     ) { padding ->
                         Box(Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp)) {
                             when (page) {
-                                Page.HOME -> HomePage(onReconnect, onComputerSelected, setup.permissionsGranted, { showSetup = true })
+                                Page.HOME -> HomePage(onReconnect, onComputerSelected, setup.permissionsGranted, { showSetup = true }, onSetupBluetooth)
                                 Page.LOGS -> LogsPage()
                             }
                         }
@@ -283,7 +284,7 @@ private fun SetupRow(title: String, description: String, enabled: Boolean, onCli
 }
 
 @Composable
-private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredComputer) -> Unit, setupComplete: Boolean, onSetup: () -> Unit) {
+private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredComputer) -> Unit, setupComplete: Boolean, onSetup: () -> Unit, onSetupBluetooth: (() -> Unit)?) {
     val context = LocalContext.current
     var forget by remember { mutableStateOf(false) }
     if (forget) AlertDialog(
@@ -325,13 +326,26 @@ private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredCom
             }
         }
         Text(when (status) {
-            ConnectionStatus.CONNECTED -> "●  Connected"
-            ConnectionStatus.CONNECTING -> "●  Connecting…"
+            ConnectionStatus.CONNECTED -> if (BridgeState.usingBluetooth.value) "●  Connected via Bluetooth" else "●  Connected"
+            ConnectionStatus.CONNECTING -> if (BridgeState.usingBluetooth.value) "●  Connecting via Bluetooth…" else "●  Connecting…"
             ConnectionStatus.AWAITING_APPROVAL -> "●  Waiting for approval…"
             else -> "●  Disconnected"
         }, color = if (status == ConnectionStatus.CONNECTED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
         Button(onClick = { showComputers = !showComputers }) {
             Text(if (showComputers) "Hide computers" else "Find computers")
+        }
+        if (onSetupBluetooth != null && BridgeState.bluetoothAvailable.value &&
+            !BridgeState.bluetoothBackupReady.value &&
+            status == ConnectionStatus.CONNECTED && !BridgeState.usingBluetooth.value) {
+            TextButton(onClick = onSetupBluetooth, enabled = !BridgeState.bluetoothSetupInProgress.value) {
+                Text(if (BridgeState.bluetoothSetupInProgress.value) "Waiting for Bluetooth pairing…" else "Enable Bluetooth backup")
+            }
+            BridgeState.bluetoothSetupMessage.value?.let { message ->
+                Text(message, style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            }
+        }
+        if (BridgeState.bluetoothBackupReady.value && status == ConnectionStatus.CONNECTED && !BridgeState.usingBluetooth.value) {
+            Text("Bluetooth backup ready", style = MaterialTheme.typography.bodySmall)
         }
         if (showComputers) NearbyComputers(onComputerSelected)
         if (BridgeState.serverHost.value.isNotBlank() && status != ConnectionStatus.CONNECTED && status != ConnectionStatus.CONNECTING) {

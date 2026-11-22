@@ -320,6 +320,7 @@ class IpcServer:
                 "port": int(session.address[1]),
                 "device_id": session.device_id,
                 "model": session.model,
+                "transport": session.transport,
                 "active": session is active,
                 "finding_phone": getattr(session, "finding_phone", False),
             }
@@ -338,7 +339,7 @@ class IpcServer:
 
     async def _pairing_pending(
         self, params: Mapping[str, Any],
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, str | None]]:
         del params
         return [
             {
@@ -346,6 +347,7 @@ class IpcServer:
                 "model": request.model,
                 "address": request.address,
                 "fingerprint": request.fingerprint,
+                "bluetooth_passkey": request.bluetooth_passkey,
             }
             for request in self.pairing.pending()
         ]

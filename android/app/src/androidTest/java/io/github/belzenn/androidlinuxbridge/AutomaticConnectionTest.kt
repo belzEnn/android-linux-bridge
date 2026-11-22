@@ -7,8 +7,12 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionManager
 import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
 import io.github.belzenn.androidlinuxbridge.protocol.MessageRouter
@@ -16,6 +20,7 @@ import io.github.belzenn.androidlinuxbridge.service.BootReceiver
 import io.github.belzenn.androidlinuxbridge.settings.ConnectionSettings
 import org.json.JSONObject
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.InetAddress
@@ -27,6 +32,42 @@ import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class AutomaticConnectionTest {
+    @Test fun wifiAutomaticallyFailsOverToBluetoothAndReturns() {
+        assumeTrue(InstrumentationRegistry.getArguments().getString("bridgeAutomaticHandoff") == "true")
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        fun shell(command: String): String =
+            ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand(command))
+                .bufferedReader().use { it.readText() }
+
+        assertTrue("Start the test with Wi-Fi enabled", shell("cmd wifi status").contains("Wifi is enabled"))
+        ActivityScenario.launch(MainActivity::class.java).use { activity ->
+            fun waitForConnection(bluetooth: Boolean, requireBackup: Boolean = false) {
+                val deadline = SystemClock.elapsedRealtime() + 45_000
+                while (SystemClock.elapsedRealtime() < deadline) {
+                    var matches = false
+                    activity.onActivity {
+                        matches = BridgeState.connectionStatus.value == ConnectionStatus.CONNECTED &&
+                            BridgeState.usingBluetooth.value == bluetooth &&
+                            (!requireBackup || BridgeState.bluetoothBackupReady.value)
+                    }
+                    if (matches) return
+                    SystemClock.sleep(250)
+                }
+                fail(if (bluetooth) "Bluetooth fallback did not connect" else "Wi-Fi connection did not become ready")
+            }
+
+            waitForConnection(bluetooth = false, requireBackup = true)
+            try {
+                shell("svc wifi disable")
+                waitForConnection(bluetooth = true)
+                shell("svc wifi enable")
+                waitForConnection(bluetooth = false)
+            } finally {
+                shell("svc wifi enable")
+            }
+        }
+    }
+
     @Test fun bootRequiresSavedComputerAndPermission() {
         val base = ApplicationProvider.getApplicationContext<Context>()
         val preferences = base.getSharedPreferences("boot_receiver_test", Context.MODE_PRIVATE)
@@ -89,12 +130,38 @@ class AutomaticConnectionTest {
         try {
             manager.start()
             assertTrue(connected.await(5, TimeUnit.SECONDS))
-            manager.reconnect()
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(manager::reconnect)
             assertEquals("saved-token", result.get(10, TimeUnit.SECONDS))
         } finally {
             manager.stop()
             server.close()
             executor.shutdownNow()
+        }
+    }
+
+    @Test fun stopClosesActiveTlsConnectionFromMainThread() {
+        TlsTestServer.open().use { server ->
+            server.soTimeout = 5000
+            val connected = CountDownLatch(1)
+            val manager = ConnectionManager("127.0.0.1", server.localPort, "test", "Test", "token", {},
+                MessageRouter(emptyMap()),
+                { if (it == ConnectionStatus.CONNECTED) connected.countDown() }, {},
+                pinnedKey = TlsTestServer.pin)
+            try {
+                manager.start()
+                server.accept().use { socket ->
+                    socket.soTimeout = 5000
+                    val reader = socket.getInputStream().bufferedReader()
+                    assertEquals("pairing.request", JSONObject(reader.readLine()).getString("method"))
+                    socket.getOutputStream().write(
+                        "{\"kind\":\"response\",\"id\":\"pairing\",\"result\":{\"accepted\":true}}\n".toByteArray())
+                    assertTrue(connected.await(5, TimeUnit.SECONDS))
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(manager::stop)
+                    assertNull("Stopping should close the active TLS session", reader.readLine())
+                }
+            } finally {
+                manager.stop()
+            }
         }
     }
 

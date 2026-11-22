@@ -16,6 +16,7 @@ class PairingRequest:
     model: str
     address: str
     fingerprint: str
+    bluetooth_passkey: str | None = None
 
 
 class PairingManager:
@@ -28,8 +29,12 @@ class PairingManager:
     def authenticate(self, device_id: str, token: str | None) -> bool:
         return self.trusted_devices.authenticate(device_id, token)
 
-    async def request(self, device_id: str, model: str, address: str) -> bool:
-        request = PairingRequest(uuid.uuid4().hex[:8], device_id, model, address, self.fingerprint)
+    async def request(
+        self, device_id: str, model: str, address: str, *, bluetooth_passkey: str | None = None
+    ) -> bool:
+        request = PairingRequest(
+            uuid.uuid4().hex[:8], device_id, model, address, self.fingerprint, bluetooth_passkey
+        )
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending[request.id] = (request, future)
         self.on_changed()

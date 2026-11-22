@@ -9,6 +9,8 @@ pub struct Device {
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default)]
+    pub transport: Option<String>,
+    #[serde(default)]
     pub active: bool,
     #[serde(default)]
     pub finding_phone: bool,
@@ -26,6 +28,8 @@ pub struct PairingRequest {
     pub model: String,
     pub address: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub bluetooth_passkey: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]

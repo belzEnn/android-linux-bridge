@@ -1,9 +1,13 @@
 package io.github.belzenn.androidlinuxbridge.discovery
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.IpPrefix
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Handler
+import android.os.Build
 import android.os.Looper
 
 data class DiscoveredComputer(
@@ -20,6 +24,7 @@ class ComputerDiscoveryManager(
     private val onLog: (String) -> Unit
 ) {
     private val nsdManager = context.getSystemService(NsdManager::class.java)
+    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val computers = linkedMapOf<String, DiscoveredComputer>()
     private val resolving = mutableSetOf<String>()
@@ -27,14 +32,18 @@ class ComputerDiscoveryManager(
     private var generation = 0
     private var listener: NsdManager.DiscoveryListener? = null
 
-    fun start() {
+    fun start(network: Network? = null) {
         if (discovering) return
         discovering = true
         val current = ++generation
         val callback = createListener(current)
         listener = callback
         try {
-            nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, callback)
+            if (Build.VERSION.SDK_INT >= 33 && network != null) {
+                nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, network, mainHandler::post, callback)
+            } else {
+                nsdManager.discoverServices(SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, callback)
+            }
         } catch (exception: RuntimeException) {
             discovering = false
             notifyLog("Computer search unavailable: ${exception.message}")
@@ -101,7 +110,14 @@ class ComputerDiscoveryManager(
     }
 
     private fun addResolvedComputer(serviceInfo: NsdServiceInfo) {
-        val host = serviceInfo.host?.hostAddress ?: return
+        val host = if (Build.VERSION.SDK_INT >= 34) {
+            val addresses = serviceInfo.hostAddresses
+            val localPrefixes = serviceInfo.network?.let(connectivity::getLinkProperties)
+                ?.linkAddresses.orEmpty().map { IpPrefix(it.address, it.prefixLength) }
+            (addresses.firstOrNull { address -> localPrefixes.any { it.contains(address) } }
+                ?: addresses.firstOrNull())?.hostAddress
+        } else serviceInfo.host?.hostAddress
+        if (host == null) return
         if (serviceInfo.port !in 1..65535) return
         val attributes = serviceInfo.attributes
         val version = attributes["protocol_version"]?.decodeToString()

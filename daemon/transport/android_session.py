@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import uuid
-import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -27,17 +26,19 @@ class AndroidSession:
         device_id: str,
         model: str,
         on_event: Callable[["AndroidSession", str, dict[str, Any]], None] | None = None,
+        *,
+        transport: str = "wifi",
     ) -> None:
         self.on_event = on_event
         self.reader = reader
         self.writer = writer
         self.device_id = device_id
         self.model = model
+        self.transport = transport
         self.address: tuple[str, int] = writer.get_extra_info("peername")
         self._pending: dict[str, asyncio.Future[Any]] = {}
         self._write_lock = asyncio.Lock()
         self._closed = False
-        self._last_received = time.monotonic()
 
     @property
     def connected(self) -> bool:
@@ -103,9 +104,6 @@ class AndroidSession:
                 else HEARTBEAT_RETRY_DELAY_SECONDS
             )
             await asyncio.sleep(delay)
-            if failures == 0 and time.monotonic() - self._last_received < HEARTBEAT_INTERVAL_SECONDS:
-                continue
-
             try:
                 result = await self.request(
                     "system.ping",
@@ -155,7 +153,6 @@ class AndroidSession:
                     continue
 
                 self._handle_message(message)
-                self._last_received = time.monotonic()
         finally:
             await self.close()
 

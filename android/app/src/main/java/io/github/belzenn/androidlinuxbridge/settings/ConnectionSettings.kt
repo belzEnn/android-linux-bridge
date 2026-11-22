@@ -1,5 +1,8 @@
 package io.github.belzenn.androidlinuxbridge.settings
 
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -8,6 +11,35 @@ import java.util.UUID
 data class ServerAddress(val host: String, val port: Int, val computerName: String, val distribution: String)
 
 object ConnectionSettings {
+    fun hasBluetoothPermission(context: Context): Boolean =
+        android.os.Build.VERSION.SDK_INT < 31 || context.checkSelfPermission(
+            Manifest.permission.BLUETOOTH_CONNECT
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    fun bluetoothAddress(context: Context): String? =
+        preferredServiceName(context)?.let { preferences(context).getString("bluetooth_address:$it", null) }
+
+    fun canUseBluetoothBackup(context: Context): Boolean =
+        hasBluetoothPermission(context) && bluetoothAddress(context) != null
+
+    fun saveBluetoothAddress(context: Context, address: String) {
+        val computer = preferredServiceName(context) ?: return
+        if (BluetoothAdapter.checkBluetoothAddress(address)) {
+            preferences(context).edit().putString("bluetooth_address:$computer", address).apply()
+        }
+    }
+
+    fun bondedComputer(context: Context): android.bluetooth.BluetoothDevice? {
+        val address = bluetoothAddress(context) ?: return null
+        if (!hasBluetoothPermission(context)) return null
+        return try {
+            val adapter = context.getSystemService(BluetoothManager::class.java)?.adapter
+            adapter?.takeIf { it.isEnabled }?.bondedDevices?.firstOrNull { it.address == address }
+        } catch (_: SecurityException) {
+            null
+        }
+    }
+
     fun hasLocalNetworkPermission(context: Context): Boolean =
         android.os.Build.VERSION.SDK_INT < 37 || context.checkSelfPermission(
             android.Manifest.permission.ACCESS_LOCAL_NETWORK
@@ -78,6 +110,9 @@ object ConnectionSettings {
     }
 
     fun clearPairingToken(context: Context) {
+        preferredServiceName(context)?.let {
+            preferences(context).edit().remove("bluetooth_address:$it").apply()
+        }
         securePreferences(context).edit().remove(trustKey(context)).remove(PAIRING_TOKEN_KEY).commit()
     }
 

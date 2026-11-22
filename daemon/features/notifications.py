@@ -22,6 +22,7 @@ class NotificationDispatcher:
         self._desktop: OrderedDict[int, tuple[AndroidSession, str]] = OrderedDict()
         self._battery_alerts: dict[str, set[int]] = {}
         self._bus: MessageBus | None = None
+        self.active_session = None
 
     def start(self) -> None:
         self._spawn(self._run(), "desktop-notifications")
@@ -184,6 +185,10 @@ class NotificationDispatcher:
                 bus.disconnect()
 
     async def _dismiss_on_phone(self, session: AndroidSession, key: str) -> None:
+        if self.active_session is not None:
+            session = self.active_session(session.device_id)
+            if session is None:
+                return
         try:
             await session.request("notification.dismiss", {"id": key})
         except (RemoteError, ConnectionError, OSError, asyncio.TimeoutError):

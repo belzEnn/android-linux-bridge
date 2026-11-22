@@ -15,6 +15,11 @@ object BridgeState {
     var confirmFingerprint: ((Boolean) -> Unit)? = null
     val batteryLevel = mutableIntStateOf(-1)
     val connectionStatus = mutableStateOf(ConnectionStatus.DISCONNECTED)
+    val usingBluetooth = mutableStateOf(false)
+    val bluetoothAvailable = mutableStateOf(false)
+    val bluetoothBackupReady = mutableStateOf(false)
+    val bluetoothSetupInProgress = mutableStateOf(false)
+    val bluetoothSetupMessage = mutableStateOf<String?>(null)
     val serverHost = mutableStateOf("")
     val computerName = mutableStateOf("")
     val distribution = mutableStateOf("")
