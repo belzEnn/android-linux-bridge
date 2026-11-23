@@ -167,6 +167,7 @@ fn build_home(
     find_phone.set_halign(gtk::Align::Start);
     device_card.append(&find_phone);
     content.append(&device_card);
+    content.append(&crate::features::audio::card(window));
 
     let battery_card = gtk::Box::new(gtk::Orientation::Vertical, 10);
     battery_card.add_css_class("overview-card");
