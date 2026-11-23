@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import os
@@ -6,7 +7,9 @@ import sys
 
 from .features.notifications import NotificationDispatcher
 from .features.clipboard import ClipboardSync
-from .api.ipc import IpcServer, IpcStartupError
+from .api.ipc import IpcClient, IpcServer, IpcStartupError
+from .features.audio import AudioRoutes
+from .protocol import ProtocolError
 from .transport.android_server import DaemonServer
 from .transport.bluetooth import BluetoothProfile
 from .transport.discovery import MdnsAdvertisement
@@ -26,13 +29,14 @@ async def main() -> None:
     notifications = NotificationDispatcher()
     clipboard = ClipboardSync(server.registry)
     advertisement = MdnsAdvertisement(server.port)
+    audio = AudioRoutes()
     bluetooth = None
     bluetooth_session = os.environ.get("ANDROID_LINUX_BRIDGE_BLUETOOTH_SESSION")
     if bluetooth_session != "1" and os.environ.get("ANDROID_LINUX_BRIDGE_BLUETOOTH_PROBE") == "1":
-        bluetooth = BluetoothProfile(server, probe_only=True)
+        bluetooth = BluetoothProfile(server, probe_only=True, audio=audio)
     elif bluetooth_session != "0":
-        bluetooth = BluetoothProfile(server, probe_only=False)
-    ipc_server = IpcServer(server.registry, server.pairing)
+        bluetooth = BluetoothProfile(server, probe_only=False, audio=audio)
+    ipc_server = IpcServer(server.registry, server.pairing, audio=audio)
     notifications.active_session = lambda device_id: next(
         (session for session in server.registry.sessions if session.device_id == device_id), None
     )
@@ -76,12 +80,36 @@ async def main() -> None:
         for task in background:
             task.cancel()
         await asyncio.gather(*background, return_exceptions=True)
+        audio.close()
         await _safe_close("server", server.close())
         await _safe_close("clipboard", clipboard.close())
         await _safe_close("notifications", notifications.close())
 
 
+async def toggle_audio(address: str | None) -> None:
+    ipc = IpcClient()
+    try:
+        await ipc.connect()
+        result = await ipc.request("audio.route.toggle", {"address": address}, timeout=15)
+        print("Phone audio switched to PC." if result["on_pc"] else "Phone audio returned to phone.")
+    finally:
+        await ipc.close()
+
+
 def run() -> None:
+    parser = argparse.ArgumentParser(prog="android-linux-bridge-daemon")
+    parser.add_argument("--toggle-phone-audio", action="store_true")
+    parser.add_argument("--phone", metavar="ADDRESS")
+    args = parser.parse_args()
+    if args.toggle_phone_audio:
+        try:
+            asyncio.run(toggle_audio(args.phone))
+        except (OSError, RuntimeError, ProtocolError) as error:
+            print(str(error) or "The daemon did not respond.", file=sys.stderr)
+            raise SystemExit(1) from None
+        return
+    if args.phone is not None:
+        parser.error("--phone requires --toggle-phone-audio")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     try:
         asyncio.run(main())

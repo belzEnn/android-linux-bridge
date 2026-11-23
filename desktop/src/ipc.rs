@@ -56,6 +56,30 @@ pub fn socket_path() -> PathBuf {
     PathBuf::from(format!("/tmp/android-linux-bridge-{uid}.sock"))
 }
 
+pub fn request_once<T: DeserializeOwned>(method: &str, params: Value) -> Result<T, String> {
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| error.to_string())?;
+    runtime.block_on(async {
+        let stream = UnixStream::connect(socket_path())
+            .await
+            .map_err(|error| format!("Could not connect to the daemon: {error}"))?;
+        Client::new(stream)
+            .request_with_timeout(method, params, Duration::from_secs(15))
+            .await
+    })
+}
+
+pub async fn request_from_ui<T: DeserializeOwned + Send + 'static>(
+    method: &'static str,
+    params: Value,
+) -> Result<T, String> {
+    gtk::gio::spawn_blocking(move || request_once(method, params))
+        .await
+        .map_err(|_| "Daemon request failed".to_owned())?
+}
+
 pub fn spawn(command_rx: Receiver<Command>, event_tx: Sender<Event>) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let runtime = Builder::new_current_thread().enable_all().build().unwrap();
@@ -265,8 +289,17 @@ impl Client {
         method: &str,
         params: Value,
     ) -> Result<T, String> {
+        self.request_with_timeout(method, params, Duration::from_secs(5)).await
+    }
+
+    async fn request_with_timeout<T: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: Value,
+        limit: Duration,
+    ) -> Result<T, String> {
         self.reusable = false;
-        timeout(Duration::from_secs(5), self.exchange(method, params))
+        timeout(limit, self.exchange(method, params))
             .await
             .map_err(|_| "Daemon request timed out".to_string())?
     }

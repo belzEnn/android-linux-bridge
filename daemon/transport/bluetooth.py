@@ -8,7 +8,7 @@ from contextlib import suppress
 from dbus_fast import AuthError, BusType, InvalidAddressError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 
-from ..features.audio import toggle_audio
+from ..features.audio import AudioRoutes
 from ..protocol import MAX_MESSAGE_BYTES
 from .android_server import DaemonServer
 from .android_session import AndroidSession, RemoteError
@@ -25,9 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class BluetoothProfile:
-    def __init__(self, server: DaemonServer, *, probe_only: bool) -> None:
+    def __init__(self, server: DaemonServer, *, probe_only: bool, audio: AudioRoutes) -> None:
         self._server = server
         self._probe_only = probe_only
+        self._audio = audio
         self._bus: MessageBus | None = None
         self._bluez_owner: str | None = None
         self._clients: dict[tuple[str, str], asyncio.Task] = {}
@@ -329,7 +330,7 @@ class BluetoothProfile:
             writer = connected.result()
             if profile == AUDIO_CONTROL_PATH:
                 await self._server.bluetooth_audio_client(
-                    reader, writer, lambda: toggle_audio(self._call, self._bluez_owner, device)
+                    reader, writer, lambda: self._audio.toggle_device(device)
                 )
             elif self._probe_only:
                 await self._server.probe_client(reader, writer)

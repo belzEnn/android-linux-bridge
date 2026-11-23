@@ -107,6 +107,8 @@ pub fn build(
     stack.add_titled(&notifications, Some("notifications"), "Notifications");
     let devices = build_devices_page(&window, state.clone(), command_tx.clone());
     stack.add_titled(&devices, Some("devices"), "Devices");
+    let shortcuts = crate::features::shortcuts::page(&window);
+    stack.add_titled(&shortcuts, Some("shortcuts"), "Keybinds");
     add_sidebar_navigation(&sidebar, &stack, &page_title);
     let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
     spacer.set_vexpand(true);
@@ -379,6 +381,7 @@ fn add_sidebar_navigation(sidebar: &gtk::Box, stack: &gtk::Stack, title: &adw::W
     set_margins(&list, 8);
     for (name, label, icon) in [
         ("home", "Home", "go-home-symbolic"),
+        ("shortcuts", "Keybinds", "input-keyboard-symbolic"),
         (
             "notifications",
             "Notifications",

@@ -19,6 +19,8 @@ from ..protocol import (
 from ..transport.android_server import SessionRegistry
 from ..transport.android_session import RemoteError
 from ..domain.pairing import PairingManager
+from ..features.audio import AudioRoutes
+from ..features.keybinds import HyprlandKeybinds, audio_command
 
 
 def get_ipc_socket_path() -> Path:
@@ -47,10 +49,14 @@ class IpcServer:
         registry: SessionRegistry,
         pairing: PairingManager | None = None,
         socket_path: Path | None = None,
+        *,
+        audio: AudioRoutes | None = None,
     ) -> None:
         self.registry = registry
         self.pairing = pairing or PairingManager()
         self.socket_path = socket_path or get_ipc_socket_path()
+        self.audio = audio or AudioRoutes()
+        self.keybinds = HyprlandKeybinds(audio_command(self.socket_path))
         self._server: asyncio.Server | None = None
         self._clients: dict[asyncio.Task, asyncio.StreamWriter] = {}
         self._subscribers: set[asyncio.Queue] = set()
@@ -61,6 +67,10 @@ class IpcServer:
             Callable[[Mapping[str, Any]], Awaitable[Any]],
         ] = {
             "battery.get": self._battery_get,
+            "audio.route.list": self._audio_list,
+            "audio.route.toggle": self._audio_toggle,
+            "keybinds.hyprland": self.keybinds.request,
+            "keybinds.audio-command": self._audio_command,
             "system.find_phone": self._find_phone,
             "system.find_phone.stop": self._stop_find_phone,
             "notifications.settings.get": self._notifications_get,
@@ -256,10 +266,25 @@ class IpcServer:
             result = await handler(params)
         except (IpcRequestError, RemoteError) as exception:
             return make_error(request_id, exception.code, str(exception))
-        except (ConnectionError, TimeoutError, RuntimeError) as exception:
+        except TimeoutError:
+            return make_error(request_id, "REQUEST_FAILED", "The daemon operation timed out")
+        except (OSError, RuntimeError) as exception:
             return make_error(request_id, "REQUEST_FAILED", str(exception))
 
         return make_response(request_id, result)
+
+    async def _audio_list(self, params: Mapping[str, Any]) -> Any:
+        return await self.audio.list_phones()
+
+    async def _audio_command(self, params: Mapping[str, Any]) -> Any:
+        return {"command": self.keybinds.command}
+
+    async def _audio_toggle(self, params: Mapping[str, Any]) -> Any:
+        path = params.get("path")
+        address = params.get("address")
+        if any(value is not None and not isinstance(value, str) for value in (path, address)):
+            raise IpcRequestError("INVALID_REQUEST", "Expected a Bluetooth path or address")
+        return {"on_pc": await self.audio.toggle_phone(path, address)}
 
     async def _stop_find_phone(self, params: Mapping[str, Any]) -> Any:
         return await self._device_request("system.find_phone.stop", params)
