@@ -8,13 +8,16 @@ from contextlib import suppress
 from dbus_fast import AuthError, BusType, InvalidAddressError, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 
+from ..features.audio import toggle_audio
 from ..protocol import MAX_MESSAGE_BYTES
 from .android_server import DaemonServer
 from .android_session import AndroidSession, RemoteError
 
 PROBE_UUID = "193d39e6-c2a6-4dcb-b93c-2671860ee44d"
 SERVICE_UUID = "b0159377-444a-4988-a430-4aec727f715c"
+AUDIO_CONTROL_UUID = "25b49f7e-268a-4fe0-bd73-7a942681f443"
 PROFILE_PATH = "/io/github/belzenn/AndroidLinuxBridge/Bluetooth"
+AUDIO_CONTROL_PATH = f"{PROFILE_PATH}/Audio"
 PROFILE_INTERFACE = "org.bluez.Profile1"
 AGENT_PATH = f"{PROFILE_PATH}/PairingAgent"
 AGENT_INTERFACE = "org.bluez.Agent1"
@@ -27,7 +30,7 @@ class BluetoothProfile:
         self._probe_only = probe_only
         self._bus: MessageBus | None = None
         self._bluez_owner: str | None = None
-        self._clients: dict[str, asyncio.Task] = {}
+        self._clients: dict[tuple[str, str], asyncio.Task] = {}
         self._adapter: tuple[str, str] | None = None
         self._pairing_task: asyncio.Task | None = None
         self._pairing_session: AndroidSession | None = None
@@ -211,6 +214,17 @@ class BluetoothProfile:
         self._bus.add_message_handler(self._handle_message)
         service_uuid = PROBE_UUID if self._probe_only else SERVICE_UUID
         name = "Bluetooth probe" if self._probe_only else "Bluetooth session"
+        await self._register_profile(PROFILE_PATH, service_uuid, name)
+        if not self._probe_only:
+            try:
+                await asyncio.wait_for(
+                    self._register_profile(AUDIO_CONTROL_PATH, AUDIO_CONTROL_UUID, "audio control"),
+                    timeout=2,
+                )
+            except (OSError, RuntimeError) as exception:
+                logger.warning("Bluetooth audio control unavailable: %s", exception)
+
+    async def _register_profile(self, path: str, service_uuid: str, name: str) -> None:
         await self._call(
             Message(
                 destination=self._bluez_owner,
@@ -219,7 +233,7 @@ class BluetoothProfile:
                 member="RegisterProfile",
                 signature="osa{sv}",
                 body=[
-                    PROFILE_PATH,
+                    path,
                     service_uuid,
                     {
                         "Name": Variant("s", f"Android Linux Bridge {name}"),
@@ -247,19 +261,22 @@ class BluetoothProfile:
             return self._handle_agent(message)
         if (
             message.message_type != MessageType.METHOD_CALL
-            or message.path != PROFILE_PATH
+            or message.path not in (PROFILE_PATH, AUDIO_CONTROL_PATH)
             or message.interface != PROFILE_INTERFACE
+            or (self._probe_only and message.path == AUDIO_CONTROL_PATH)
         ):
             return None
 
         if message.sender == self._bluez_owner and not message.unix_fds:
             if message.member == "Release" and not message.signature:
-                self._bluez_owner = None
-                for task in self._clients.values():
-                    task.cancel()
+                if message.path == PROFILE_PATH:
+                    self._bluez_owner = None
+                for (path, _), task in self._clients.items():
+                    if path == message.path or self._bluez_owner is None:
+                        task.cancel()
                 return Message.new_method_return(message)
             if message.member == "RequestDisconnection" and message.signature == "o":
-                task = self._clients.get(message.body[0])
+                task = self._clients.get((message.path, message.body[0]))
                 if task is not None:
                     task.cancel()
                 return Message.new_method_return(message)
@@ -270,18 +287,18 @@ class BluetoothProfile:
             and message.signature == "oha{sv}"
             and message.body[1] == 0
             and len(message.unix_fds) == 1
-            and message.body[0] not in self._clients
+            and (message.path, message.body[0]) not in self._clients
         ):
-            device = message.body[0]
+            key = (message.path, message.body[0])
             fd = message.unix_fds[0]
             try:
                 client = socket.socket(fileno=fd)
             except OSError:
                 pass
             else:
-                task = asyncio.create_task(self._serve(client))
-                self._clients[device] = task
-                task.add_done_callback(lambda _: self._forget_client(device, client))
+                task = asyncio.create_task(self._serve(client, *key))
+                self._clients[key] = task
+                task.add_done_callback(lambda _: self._forget_client(key, client))
                 return Message.new_method_return(message)
 
         for fd in message.unix_fds:
@@ -289,11 +306,11 @@ class BluetoothProfile:
                 os.close(fd)
         return Message.new_error(message, "org.bluez.Error.Rejected", "Bluetooth profile rejected call")
 
-    def _forget_client(self, device: str, client: socket.socket) -> None:
-        self._clients.pop(device, None)
+    def _forget_client(self, key: tuple[str, str], client: socket.socket) -> None:
+        self._clients.pop(key, None)
         client.close()
 
-    async def _serve(self, client: socket.socket) -> None:
+    async def _serve(self, client: socket.socket, profile: str, device: str) -> None:
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader(limit=MAX_MESSAGE_BYTES)
         connected = loop.create_future()
@@ -310,7 +327,11 @@ class BluetoothProfile:
                 ssl_shutdown_timeout=2.0,
             )
             writer = connected.result()
-            if self._probe_only:
+            if profile == AUDIO_CONTROL_PATH:
+                await self._server.bluetooth_audio_client(
+                    reader, writer, lambda: toggle_audio(self._call, self._bluez_owner, device)
+                )
+            elif self._probe_only:
                 await self._server.probe_client(reader, writer)
             else:
                 await self._server.bluetooth_client(reader, writer)

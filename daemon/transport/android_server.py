@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import ssl
+from collections.abc import Awaitable, Callable
 from .tls import server_identity
 
 from .android_session import AndroidSession
@@ -97,6 +98,35 @@ class DaemonServer:
 
     async def bluetooth_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         await self._run_client(reader, writer, transport="bluetooth")
+
+    async def bluetooth_audio_client(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        toggle: Callable[[], Awaitable[bool]],
+    ) -> None:
+        if await self._pair_client(reader, writer, trusted_only=True) is None:
+            return
+
+        data = await asyncio.wait_for(reader.readline(), 5.0)
+        if not data:
+            return
+        request = decode_message(data)
+        request_id = request.get("id")
+        if not isinstance(request_id, str) or not request_id:
+            raise ProtocolError("Audio request has no id")
+        if request.get("kind") != "request" or request.get("method") != "audio.route.toggle":
+            response = make_error(request_id, "METHOD_NOT_FOUND", "Expected audio.route.toggle")
+        else:
+            try:
+                on_pc = await asyncio.wait_for(toggle(), 10.0)
+                response = make_response(request_id, {"on_pc": on_pc})
+            except TimeoutError:
+                response = make_error(request_id, "AUDIO_TIMEOUT", "Bluetooth audio switching timed out")
+            except (OSError, RuntimeError) as exception:
+                response = make_error(request_id, "AUDIO_FAILED", str(exception))
+        writer.write(encode_message(response))
+        await writer.drain()
 
     async def _run_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *, transport: str = "wifi"

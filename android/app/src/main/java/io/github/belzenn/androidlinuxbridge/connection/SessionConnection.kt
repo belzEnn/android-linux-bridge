@@ -66,8 +66,12 @@ internal class LanSessionConnection(
     }
 }
 
-internal class BluetoothSessionConnection(device: BluetoothDevice, pin: String) : SessionConnection {
-    private val socket = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
+internal class BluetoothSessionConnection(
+    device: BluetoothDevice,
+    pin: String,
+    service: UUID = SERVICE_UUID,
+) : SessionConnection {
+    private val socket = device.createRfcommSocketToServiceRecord(service)
     private val engine = BridgeTls.context(pin).createSSLEngine().apply {
         useClientMode = true
         enabledProtocols = arrayOf("TLSv1.2")

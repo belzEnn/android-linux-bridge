@@ -1,4 +1,12 @@
 <resources>
     <string name="app_name">Android Linux Bridge</string>
     <string name="clipboard_tile_label">Clipboard history</string>
+    <string name="audio_tile_label">Phone audio</string>
+    <string name="audio_tile_pc">PC</string>
+    <string name="audio_tile_phone">Phone</string>
+    <string name="audio_tile_setup">Set up Bluetooth backup</string>
+    <string name="audio_tile_switching">Switching…</string>
+    <string name="audio_tile_timeout">Bluetooth audio switching timed out</string>
+    <string name="audio_tile_failed">Bluetooth audio unavailable</string>
+    <string name="audio_tile_error">Could not switch audio. %1$s</string>
 </resources>

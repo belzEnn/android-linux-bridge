@@ -70,6 +70,19 @@
             </intent-filter>
         </activity>
         <service
+            android:name=".features.audio.AudioTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_audio_route"
+            android:label="@string/audio_tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.quicksettings.TOGGLEABLE_TILE"
+                android:value="true" />
+        </service>
+        <service
             android:name=".features.notifications.NotificationForwardingService"
             android:exported="true"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
