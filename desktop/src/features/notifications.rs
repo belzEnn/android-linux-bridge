@@ -37,35 +37,52 @@ fn request(state: &mut State, tx: &Sender<Command>, change: Option<(String, bool
     }
 }
 
-pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) -> gtk::Box {
+pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) -> adw::Clamp {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
-    for setter in [
-        gtk::Widget::set_margin_top,
-        gtk::Widget::set_margin_bottom,
-        gtk::Widget::set_margin_start,
-        gtk::Widget::set_margin_end,
-    ] {
-        setter(content.upcast_ref(), 16);
-    }
+    let phones = adw::PreferencesGroup::builder()
+        .title("Connected phone")
+        .build();
     let selector = gtk::DropDown::from_strings(&[]);
+    selector.set_sensitive(false);
+    selector.update_property(&[gtk::accessible::Property::Label("Connected phone")]);
     let device_ids = Rc::new(RefCell::new(Vec::<String>::new()));
-    let status = gtk::Label::new(Some("Select a connected phone"));
+    let status = gtk::Label::new(Some(
+        "No connected phone. Connect Android to configure notifications.",
+    ));
     status.set_wrap(true);
+    status.set_xalign(0.0);
+    status.add_css_class("dim-label");
+    phones.add(&selector);
+    phones.add(&status);
+    content.append(&phones);
+
     let search = gtk::SearchEntry::new();
     search.set_placeholder_text(Some("Search applications"));
-    let rows = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    search.set_visible(false);
+    content.append(&search);
+
+    let rows = gtk::ListBox::new();
+    rows.set_selection_mode(gtk::SelectionMode::None);
+    rows.set_valign(gtk::Align::Start);
+    rows.add_css_class("boxed-list");
+    let no_results = adw::ActionRow::builder()
+        .title("No matching applications")
+        .build();
+    no_results.set_selectable(false);
+    no_results.set_activatable(false);
+    rows.set_placeholder(Some(&no_results));
     let scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
         .child(&rows)
         .build();
-    content.append(&selector);
-    content.append(&status);
-    content.append(&search);
+    scroll.set_visible(false);
     content.append(&scroll);
     let state = Rc::new(RefCell::new(State::default()));
     let changed_state = state.clone();
     let changed_tx = tx.clone();
     let changed_ids = device_ids.clone();
+    let changed_status = status.clone();
     let selection_handler = selector.connect_selected_notify(move |selector| {
         let mut state = changed_state.borrow_mut();
         state.selected = changed_ids
@@ -76,6 +93,7 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
         state.available = false;
         state.settings = None;
         state.pending = None;
+        changed_status.set_label("Loading notification settings…");
         request(&mut state, &changed_tx, None);
     });
     let weak_content = content.downgrade();
@@ -117,6 +135,7 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
                 index as u32
             });
             selector.unblock_signal(&selection_handler);
+            selector.set_sensitive(!current.is_empty());
             let next_id = current
                 .get(index)
                 .map(|d| d.device_id.clone())
@@ -127,6 +146,7 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
                 state.settings = None;
                 state.pending = None;
                 state.available = false;
+                status.set_label("Loading notification settings…");
                 request(&mut state, &tx, None);
             }
             known_devices = current;
@@ -178,11 +198,16 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
             state_ref.pending.is_some(),
         );
         if rendered.as_ref() != Some(&key) {
-            while let Some(child) = rows.first_child() {
-                rows.remove(&child);
-            }
-            rows.set_sensitive(state_ref.available && state_ref.pending.is_none());
+            rows.remove_all();
+            let has_settings = state_ref.settings.is_some();
+            search.set_visible(has_settings);
+            scroll.set_visible(has_settings);
             if let Some(settings) = &state_ref.settings {
+                no_results.set_title(if settings.apps.is_empty() {
+                    "No applications available"
+                } else {
+                    "No matching applications"
+                });
                 let query = search.text().to_lowercase();
                 for app in &settings.apps {
                     if !format!("{} {}", app.label, app.package)
@@ -198,6 +223,7 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
                     row.set_use_markup(false);
                     let toggle = gtk::Switch::builder()
                         .active(app.enabled)
+                        .sensitive(state_ref.available && state_ref.pending.is_none())
                         .valign(gtk::Align::Center)
                         .build();
                     row.add_suffix(&toggle);
@@ -220,7 +246,7 @@ pub fn page(devices: impl Fn() -> Vec<Device> + 'static, tx: Sender<Command>) ->
         }
         glib::ControlFlow::Continue
     });
-    content
+    crate::ui::page_clamp(&content)
 }
 
 #[cfg(test)]
@@ -333,6 +359,7 @@ mod tests {
             model: "Pixel".into(),
             host: "127.0.0.1".into(),
             port: 42,
+            transport: None,
             active: true,
             finding_phone: false,
         }]));

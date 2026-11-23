@@ -1,0 +1,58 @@
+.sidebar .navigation-sidebar > row:hover,
+.sidebar button:not(:disabled):hover {
+    background-color: alpha(@window_fg_color, 0.08);
+}
+
+.sidebar .navigation-sidebar > row:selected,
+.sidebar button:checked {
+    background-color: alpha(@window_fg_color, 0.12);
+    color: @window_fg_color;
+}
+
+.sidebar .navigation-sidebar > row:selected:hover,
+.sidebar button:checked:not(:disabled):hover {
+    background-color: alpha(@window_fg_color, 0.16);
+}
+
+.overview-card {
+    background-color: @card_bg_color;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 12px;
+    padding: 18px;
+}
+
+.device-icon {
+    background-color: alpha(@window_fg_color, 0.07);
+    border-radius: 10px;
+    padding: 12px;
+}
+
+.battery-progress trough,
+.battery-progress progress {
+    min-height: 6px;
+    border-radius: 6px;
+}
+
+.battery-progress trough {
+    background-color: alpha(@window_fg_color, 0.12);
+}
+
+.battery-progress progress {
+    background-color: alpha(@window_fg_color, 0.60);
+}
+
+.battery-low {
+    color: @error_color;
+}
+
+.battery-progress.battery-low progress {
+    background-color: @error_color;
+}
+
+.connected-status {
+    color: @success_color;
+}
+
+.offline-status {
+    opacity: 0.75;
+}

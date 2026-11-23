@@ -1,7 +1,7 @@
 package io.github.belzenn.androidlinuxbridge.features.clipboard
 
-import android.os.Bundle
 import android.os.Build
+import android.os.Bundle
 import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -29,13 +30,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import io.github.belzenn.androidlinuxbridge.ui.theme.AndroidLinuxBridgeTheme
+import io.github.belzenn.androidlinuxbridge.ui.theme.appearancePreferences
+import io.github.belzenn.androidlinuxbridge.ui.theme.useDarkTheme
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
@@ -49,8 +55,9 @@ class ClipboardHistoryActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         history = ClipboardHistory.load(this)
         setContent {
-            AndroidLinuxBridgeTheme(dynamicColor = false) {
-                var query by remember { mutableStateOf("") }
+            val appearance = remember { appearancePreferences(this).getString("theme", "system") }
+            AndroidLinuxBridgeTheme(darkTheme = useDarkTheme(appearance)) {
+                var query by rememberSaveable { mutableStateOf("") }
                 val visible = history.filter { it.text.contains(query, ignoreCase = true) }
                 BackHandler { closeHistory() }
                 Box(
@@ -59,17 +66,20 @@ class ClipboardHistoryActivity : ComponentActivity() {
                 ) {
                     Surface(
                         onClick = {},
-                        modifier = Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing),
-                        shape = MaterialTheme.shapes.extraLarge,
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+                            .padding(horizontal = 12.dp, vertical = 8.dp).widthIn(max = 560.dp).fillMaxWidth(),
+                        shape = MaterialTheme.shapes.large,
                         color = MaterialTheme.colorScheme.surface,
-                        tonalElevation = 6.dp,
-                        shadowElevation = 12.dp,
+                        shadowElevation = 4.dp,
                     ) {
                         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("Clipboard history", style = MaterialTheme.typography.headlineSmall,
                                     modifier = Modifier.weight(1f))
-                                IconButton(onClick = ::closeHistory) {
+                                IconButton(
+                                    onClick = ::closeHistory,
+                                    modifier = Modifier.semantics { contentDescription = "Close history" },
+                                ) {
                                     Text("×", style = MaterialTheme.typography.headlineSmall)
                                 }
                             }
@@ -90,7 +100,7 @@ class ClipboardHistoryActivity : ComponentActivity() {
                             OutlinedTextField(
                                 value = query,
                                 onValueChange = { query = it },
-                                placeholder = { Text("Search") },
+                                label = { Text("Search") },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
                             )
@@ -112,7 +122,7 @@ class ClipboardHistoryActivity : ComponentActivity() {
                                                 closeHistory()
                                             },
                                             shape = MaterialTheme.shapes.medium,
-                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            color = MaterialTheme.colorScheme.surfaceContainerLow,
                                         ) {
                                             Row(Modifier.fillMaxWidth().padding(start = 16.dp, top = 10.dp,
                                                 bottom = 10.dp, end = 4.dp),
@@ -122,10 +132,13 @@ class ClipboardHistoryActivity : ComponentActivity() {
                                                     Text(formatTime(item.createdAt), style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                 }
-                                                IconButton(onClick = {
-                                                    ClipboardHistory.delete(this@ClipboardHistoryActivity, item.id)
-                                                    history = history.filterNot { it.id == item.id }
-                                                }) { Text("×", style = MaterialTheme.typography.titleLarge) }
+                                                IconButton(
+                                                    onClick = {
+                                                        ClipboardHistory.delete(this@ClipboardHistoryActivity, item.id)
+                                                        history = history.filterNot { it.id == item.id }
+                                                    },
+                                                    modifier = Modifier.semantics { contentDescription = "Delete clipboard item" },
+                                                ) { Text("×", style = MaterialTheme.typography.titleLarge) }
                                             }
                                         }
                                     }

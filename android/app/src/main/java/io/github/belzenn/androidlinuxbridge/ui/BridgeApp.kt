@@ -1,16 +1,12 @@
 package io.github.belzenn.androidlinuxbridge.ui
 
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,9 +23,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import io.github.belzenn.androidlinuxbridge.BridgeState
-import io.github.belzenn.androidlinuxbridge.connection.ConnectionStatus
 import io.github.belzenn.androidlinuxbridge.discovery.DiscoveredComputer
 import io.github.belzenn.androidlinuxbridge.ui.theme.AndroidLinuxBridgeTheme
+import io.github.belzenn.androidlinuxbridge.ui.theme.appearancePreferences
+import io.github.belzenn.androidlinuxbridge.ui.theme.useDarkTheme
 import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
@@ -63,9 +60,9 @@ fun BridgeApp(
     onSetupBluetooth: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val preferences = remember { context.getSharedPreferences("bridge_appearance", Context.MODE_PRIVATE) }
+    val preferences = remember { appearancePreferences(context) }
     var theme by remember { mutableStateOf(preferences.getString("theme", "system") ?: "system") }
-    val dark = when (theme) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
+    val dark = useDarkTheme(theme)
     var page by rememberSaveable { mutableStateOf(Page.HOME) }
     var setupDismissed by rememberSaveable { mutableStateOf(false) }
     var showSetup by rememberSaveable { mutableStateOf(false) }
@@ -74,7 +71,7 @@ fun BridgeApp(
     }
     val drawer = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
-    AndroidLinuxBridgeTheme(darkTheme = dark, dynamicColor = false) {
+    AndroidLinuxBridgeTheme(darkTheme = dark) {
         if (BridgeState.findingPhone.value) {
             AlertDialog(
                 onDismissRequest = { BridgeState.stopFindingPhone?.invoke() },
@@ -114,17 +111,29 @@ fun BridgeApp(
                 val content: @Composable () -> Unit = {
                     Scaffold(
                         topBar = {
-                            TopAppBar(title = { Text(page.title) }, navigationIcon = {
-                                if (!wide) IconButton(onClick = { scope.launch { drawer.open() } }) {
-                                    Text("☰", modifier = Modifier.semantics { contentDescription = "Open sidebar" })
-                                }
-                            })
-                        }
+                            TopAppBar(
+                                title = { Text(page.title, style = MaterialTheme.typography.titleLarge) },
+                                windowInsets = WindowInsets(0, 0, 0, 0),
+                                navigationIcon = {
+                                    if (!wide) IconButton(
+                                        onClick = { scope.launch { drawer.open() } },
+                                        modifier = Modifier.semantics { contentDescription = "Open sidebar" },
+                                    ) {
+                                        NavigationIcon(Page.LOGS)
+                                    }
+                                },
+                            )
+                        },
                     ) { padding ->
-                        Box(Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp)) {
-                            when (page) {
-                                Page.HOME -> HomePage(onReconnect, onComputerSelected, setup.permissionsGranted, { showSetup = true }, onSetupBluetooth)
-                                Page.LOGS -> LogsPage()
+                        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.TopCenter) {
+                            Box(Modifier.widthIn(max = 640.dp).fillMaxSize().padding(horizontal = 20.dp)) {
+                                when (page) {
+                                    Page.HOME -> HomePage(
+                                        onReconnect, onComputerSelected, setup.permissionsGranted,
+                                        { showSetup = true }, onSetupBluetooth,
+                                    )
+                                    Page.LOGS -> LogsPage()
+                                }
                             }
                         }
                     }
@@ -138,7 +147,11 @@ fun BridgeApp(
                 } else {
                     BackHandler(drawer.isOpen) { scope.launch { drawer.close() } }
                     ModalNavigationDrawer(drawerState = drawer, drawerContent = {
-                        ModalDrawerSheet { Box(Modifier.width(280.dp)) { sidebar() } }
+                        ModalDrawerSheet(
+                            modifier = Modifier.width(280.dp),
+                            drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            windowInsets = WindowInsets(0, 0, 0, 0),
+                        ) { sidebar() }
                     }, content = content)
                 }
             }
@@ -173,15 +186,21 @@ private fun Sidebar(page: Page, theme: String, setupComplete: Boolean, onPage: (
                     label = { Text(destination.title) }, selected = page == destination,
                     onClick = { onPage(destination) },
                     icon = { NavigationIcon(destination) },
+                    shape = MaterialTheme.shapes.medium,
+                    colors = NavigationDrawerItemDefaults.colors(
+                        selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        selectedIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
                     modifier = Modifier.padding(vertical = 3.dp)
                 )
             }
-        }
-        TextButton(onClick = onSetup, enabled = !setupComplete, modifier = Modifier.fillMaxWidth()) {
-            Text(if (setupComplete) "All permissions enabled" else "Permissions & background")
-        }
-        TextButton(onClick = onAddClipboardTile, modifier = Modifier.fillMaxWidth()) {
-            Text("Add clipboard tile")
+            TextButton(onClick = onSetup, enabled = !setupComplete, modifier = Modifier.fillMaxWidth()) {
+                Text(if (setupComplete) "All permissions enabled" else "Permissions & background")
+            }
+            TextButton(onClick = onAddClipboardTile, modifier = Modifier.fillMaxWidth()) {
+                Text("Add clipboard tile")
+            }
         }
         HorizontalDivider(Modifier.padding(vertical = 12.dp))
         Row(Modifier.align(Alignment.CenterHorizontally), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -258,127 +277,27 @@ private fun ThemeIcon(theme: String) {
 @Composable
 private fun SetupOptions(setup: SetupStatus, onAccess: () -> Unit, onPermissions: () -> Unit, onAppSettings: () -> Unit, onNotifications: () -> Unit, onBattery: () -> Unit) {
     if (!setup.notificationAccess) {
-        SetupRow("Notification access", "Forward notifications to your computer.", false, onAccess)
+        SetupRow("Notification access", "Forward notifications to your computer.", onAccess)
     }
     if (!setup.notifications) {
-        SetupRow("App notifications", "Display connection status on this device.", false, onNotifications)
+        SetupRow("App notifications", "Display connection status on this device.", onNotifications)
     }
     if (!setup.localNetwork) {
-        SetupRow("Local network", "Discover and connect to computers on your Wi-Fi.", false, onPermissions)
+        SetupRow("Local network", "Discover and connect to computers on your Wi-Fi.", onPermissions)
         TextButton(onClick = onAppSettings) { Text("Open app settings if permission was denied") }
     }
     if (!setup.background) {
-        SetupRow("Background activity", "Optional: allow unrestricted battery use to keep the bridge running.", false, onBattery)
+        SetupRow("Background activity", "Optional: allow unrestricted battery use to keep the bridge running.", onBattery)
     }
 }
 
 @Composable
-private fun SetupRow(title: String, description: String, enabled: Boolean, onClick: () -> Unit) {
+private fun SetupRow(title: String, description: String, onClick: () -> Unit) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall)
             Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            TextButton(onClick = onClick, modifier = Modifier.align(Alignment.End)) { Text(if (enabled) "Enabled · Settings" else "Enable") }
-        }
-    }
-}
-
-@Composable
-private fun HomePage(onReconnect: () -> Unit, onComputerSelected: (DiscoveredComputer) -> Unit, setupComplete: Boolean, onSetup: () -> Unit, onSetupBluetooth: (() -> Unit)?) {
-    val context = LocalContext.current
-    var forget by remember { mutableStateOf(false) }
-    if (forget) AlertDialog(
-        onDismissRequest = { forget = false },
-        title = { Text("Forget computer key?") },
-        text = { Text("A new pairing will require comparing fingerprints on both devices. Continue only if you intended to reset trust.") },
-        confirmButton = { TextButton(onClick = {
-            io.github.belzenn.androidlinuxbridge.service.BridgeService.forgetPairing(context)
-            forget = false
-        }) { Text("Forget and pair again") } },
-        dismissButton = { TextButton(onClick = { forget = false }) { Text("Cancel") } }
-    )
-    var showComputers by rememberSaveable { mutableStateOf(false) }
-    val status = BridgeState.connectionStatus.value
-    val foreground = MaterialTheme.colorScheme.onSurface
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        Spacer(Modifier.height(20.dp))
-        Canvas(Modifier.size(144.dp, 112.dp)) {
-            val stroke = Stroke(3.dp.toPx())
-            drawRoundRect(foreground.copy(alpha = .06f), size = Size(size.width, size.height * .75f), cornerRadius = CornerRadius(12.dp.toPx()))
-            drawRoundRect(foreground.copy(alpha = .85f), topLeft = Offset(2.dp.toPx(), 2.dp.toPx()), size = Size(size.width - 4.dp.toPx(), size.height * .75f), cornerRadius = CornerRadius(12.dp.toPx()), style = stroke)
-            drawLine(foreground, Offset(size.width / 2, size.height * .77f), Offset(size.width / 2, size.height * .95f), stroke.width)
-            drawLine(foreground, Offset(size.width * .3f, size.height * .95f), Offset(size.width * .7f, size.height * .95f), stroke.width)
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                BridgeState.computerName.value.ifBlank { "Select a computer" },
-                style = MaterialTheme.typography.headlineMedium,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
-            if (BridgeState.distribution.value.isNotBlank()) {
-                Text(
-                    BridgeState.distribution.value,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
-            }
-        }
-        Text(when (status) {
-            ConnectionStatus.CONNECTED -> if (BridgeState.usingBluetooth.value) "●  Connected via Bluetooth" else "●  Connected"
-            ConnectionStatus.CONNECTING -> if (BridgeState.usingBluetooth.value) "●  Connecting via Bluetooth…" else "●  Connecting…"
-            ConnectionStatus.AWAITING_APPROVAL -> "●  Waiting for approval…"
-            else -> "●  Disconnected"
-        }, color = if (status == ConnectionStatus.CONNECTED) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-        Button(onClick = { showComputers = !showComputers }) {
-            Text(if (showComputers) "Hide computers" else "Find computers")
-        }
-        if (onSetupBluetooth != null && BridgeState.bluetoothAvailable.value &&
-            !BridgeState.bluetoothBackupReady.value &&
-            status == ConnectionStatus.CONNECTED && !BridgeState.usingBluetooth.value) {
-            TextButton(onClick = onSetupBluetooth, enabled = !BridgeState.bluetoothSetupInProgress.value) {
-                Text(if (BridgeState.bluetoothSetupInProgress.value) "Waiting for Bluetooth pairing…" else "Enable Bluetooth backup")
-            }
-            BridgeState.bluetoothSetupMessage.value?.let { message ->
-                Text(message, style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-            }
-        }
-        if (BridgeState.bluetoothBackupReady.value && status == ConnectionStatus.CONNECTED && !BridgeState.usingBluetooth.value) {
-            Text("Bluetooth backup ready", style = MaterialTheme.typography.bodySmall)
-        }
-        if (showComputers) NearbyComputers(onComputerSelected)
-        if (BridgeState.serverHost.value.isNotBlank() && status != ConnectionStatus.CONNECTED && status != ConnectionStatus.CONNECTING) {
-            OutlinedButton(onClick = onReconnect) { Text("Reconnect") }
-            TextButton(onClick = { forget = true }) { Text("Forget pairing") }
-        }
-        if (!setupComplete) TextButton(onClick = onSetup) { Text("Finish setup") }
-    }
-}
-
-@Composable
-private fun NearbyComputers(onSelected: (DiscoveredComputer) -> Unit) {
-    Column(Modifier.widthIn(max = 420.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Column {
-            Text("Nearby computers", style = MaterialTheme.typography.headlineSmall)
-            Text("Connect both devices to the same local network.", modifier = Modifier.padding(vertical = 12.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (BridgeState.computers.isEmpty()) {
-            OutlinedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Looking for computers…", style = MaterialTheme.typography.titleMedium)
-                    Text("Open Android Linux Bridge on your Linux computer. It will appear here automatically.")
-                }
-            }
-        }
-        BridgeState.computers.forEach { computer ->
-            OutlinedCard(onClick = { onSelected(computer) }, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(computer.computerName, style = MaterialTheme.typography.titleMedium)
-                    Text(computer.distribution, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Connect", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
-                }
-            }
+            TextButton(onClick = onClick, modifier = Modifier.align(Alignment.End)) { Text("Enable") }
         }
     }
 }
@@ -389,15 +308,23 @@ private fun LogsPage() {
     val state = rememberLazyListState()
     val latest = logs.lastOrNull()
     LaunchedEffect(latest) { if (logs.isNotEmpty()) state.animateScrollToItem(logs.lastIndex) }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Connection activity", style = MaterialTheme.typography.titleMedium)
+    Column(Modifier.fillMaxSize().padding(top = 12.dp, bottom = 20.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Connection activity", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             TextButton(onClick = BridgeState::clearLogs, enabled = logs.isNotEmpty()) { Text("Clear") }
         }
-        LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(bottom = 16.dp).background(MaterialTheme.colorScheme.surfaceContainerLow, RoundedCornerShape(12.dp)),
-            state = state, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (logs.isEmpty()) item { Text("No activity yet") }
-            items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+        OutlinedCard(Modifier.weight(1f).fillMaxWidth()) {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                state = state,
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (logs.isEmpty()) item {
+                    Text("No activity yet", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace) }
+            }
         }
     }
 }
